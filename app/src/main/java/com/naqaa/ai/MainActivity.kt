@@ -29,6 +29,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -52,7 +53,7 @@ private fun NaqaaApp() {
     var enhanced by remember { mutableStateOf<Bitmap?>(null) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("اختر صورة للبدء") }
-    var strength by remember { mutableFloatStateOf(0.55f) }
+    var strength by remember { mutableFloatStateOf(0.8f) }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
@@ -134,20 +135,64 @@ private fun NaqaaApp() {
                         }
                     }
                 } else {
-                    Text("معاينة الصورة", style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Start))
+                    Text(
+                        if (enhanced == null) "الصورة الأصلية" else "مقارنة قبل وبعد التحسين",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.align(Alignment.Start)
+                    )
                     Spacer(Modifier.height(10.dp))
-                    Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
-                        Image(
-                            bitmap = (enhanced ?: original!!).asImageBitmap(),
-                            contentDescription = "معاينة الصورة",
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)
-                                .background(androidx.compose.ui.graphics.Color(0xFFE8ECEA))
-                        )
+                    if (enhanced == null) {
+                        Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+                            Image(
+                                bitmap = original!!.asImageBitmap(),
+                                contentDescription = "الصورة الأصلية",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)
+                                    .background(androidx.compose.ui.graphics.Color(0xFFE8ECEA))
+                            )
+                        }
+                        Text("الأصل — اضغط تحسين لعرض المقارنة",
+                            color = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.padding(top = 8.dp))
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("قبل", fontWeight = FontWeight.SemiBold)
+                                Spacer(Modifier.height(6.dp))
+                                Card(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                                    Image(
+                                        bitmap = original!!.asImageBitmap(),
+                                        contentDescription = "الصورة قبل التحسين",
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier.fillMaxWidth().height(230.dp)
+                                            .background(androidx.compose.ui.graphics.Color(0xFFE8ECEA))
+                                    )
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("بعد", fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.height(6.dp))
+                                Card(shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                                    Image(
+                                        bitmap = enhanced!!.asImageBitmap(),
+                                        contentDescription = "الصورة بعد التحسين المحلي التجريبي",
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier.fillMaxWidth().height(230.dp)
+                                            .background(androidx.compose.ui.graphics.Color(0xFFE8ECEA))
+                                    )
+                                }
+                            }
+                        }
+                        Text("النتيجة حدة محلية تجريبية وليست استعادة بالذكاء الاصطناعي.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.padding(top = 8.dp))
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Text(if (enhanced == null) "الأصل" else "النتيجة المحلية التجريبية",
-                        color = MaterialTheme.colorScheme.secondary)
                     Spacer(Modifier.height(18.dp))
                     Text("قوة التحسين: ${(strength * 100).toInt()}%",
                         modifier = Modifier.align(Alignment.Start))
@@ -291,7 +336,7 @@ private object LocalEnhancer {
         val pixels = IntArray(w * h)
         input.getPixels(pixels, 0, w, 0, 0, w, h)
         val out = pixels.copyOf()
-        val a = amount.coerceIn(0f, 1f) * 0.85f
+        val a = amount.coerceIn(0f, 1f) * 1.15f
 
         for (y in 1 until h - 1) {
             for (x in 1 until w - 1) {
