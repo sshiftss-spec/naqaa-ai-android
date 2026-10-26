@@ -3,6 +3,7 @@ package com.naqaa.ai
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import kotlin.math.max
 import android.net.Uri
 import android.content.Intent
 import android.content.ContentValues
@@ -235,7 +236,7 @@ private fun NaqaaApp() {
                                 }
                             }
                         }
-                        Text("ترميم GFPGAN يعيد بناء تفاصيل الوجه تقديريًا وقد يغيّر الملامح. ابدأ بقوة منخفضة، واستخدم صورة وجه قريبة ومتمركزة؛ لا توجد في هذه النسخة محاذاة تلقائية للوجه.",
+                        Text("يكتشف التطبيق أكبر وجه في الصورة ويحاول تصحيح ميله قبل الترميم. قد تتغير بعض الملامح لأن GFPGAN يعيد بناء التفاصيل تقديريًا.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.secondary,
                             modifier = Modifier.padding(top = 8.dp))
@@ -427,19 +428,46 @@ private const val GFP_GAN_URL =
     "https://huggingface.co/ykk648/face_lib/resolve/main/face_restore/gfpgan/GFPGANv1.4.onnx"
 
 /**
- * GFPGAN v1.4 ONNX inference.
- * This MVP keeps the centered square crop, but softly feathers the blend around
- * its perimeter so the restored square does not visibly overwrite the whole crop.
- * It does not detect or align faces automatically.
+ * Detect the largest face, crop around it, rotate the crop to reduce in-plane tilt,
+ * run GFPGAN, then rotate the result back and feather the blend around the detected face.
+ * Falls back with a clear error if no face is detected instead of restoring the image center.
  */
 private object GfpganRestorer {
     fun restore(src: Bitmap, model: File, blend: Float): Bitmap {
-        val size = minOf(src.width, src.height)
-        require(size >= 64) { "الصورة صغيرة جدًا للترميم" }
-        val left = (src.width - size) / 2
-        val top = (src.height - size) / 2
-        val crop = Bitmap.createBitmap(src, left, top, size, size)
-        val inputBitmap = Bitmap.createScaledBitmap(crop, 512, 512, true)
+        val detectorOptions = com.google.mlkit.vision.face.FaceDetectorOptions.Builder()
+            .setPerformanceMode(com.google.mlkit.vision.face.FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+            .setLandmarkMode(com.google.mlkit.vision.face.FaceDetectorOptions.LANDMARK_MODE_ALL)
+            .setClassificationMode(com.google.mlkit.vision.face.FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
+            .build()
+        val detector = com.google.mlkit.vision.face.FaceDetection.getClient(detectorOptions)
+        val faces = try {
+            com.google.android.gms.tasks.Tasks.await(
+                detector.process(com.google.mlkit.vision.common.InputImage.fromBitmap(src, 0))
+            )
+        } finally {
+            detector.close()
+        }
+        val face = faces.maxByOrNull { it.boundingBox.width().toLong() * it.boundingBox.height().toLong() }
+            ?: throw IllegalArgumentException("لم يُعثر على وجه. جرّب صورة يظهر فيها الوجه بوضوح.")
+        val box = face.boundingBox
+        val faceW = box.width().coerceAtLeast(1)
+        val faceH = box.height().coerceAtLeast(1)
+        val side = (maxOf(faceW, faceH) * 1.8f).toInt().coerceAtLeast(64)
+        val cx = (box.left + box.right) / 2f
+        val cy = (box.top + box.bottom) / 2f
+        val half = side / 2f
+
+        // Build a padded square centered on the detected face; rotate to make the face upright.
+        val alignedCrop = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+        val cropCanvas = android.graphics.Canvas(alignedCrop)
+        cropCanvas.drawColor(Color.BLACK)
+        cropCanvas.save()
+        cropCanvas.translate(half - cx, half - cy)
+        cropCanvas.rotate(-face.headEulerAngleZ, cx, cy)
+        cropCanvas.drawBitmap(src, 0f, 0f, null)
+        cropCanvas.restore()
+
+        val inputBitmap = Bitmap.createScaledBitmap(alignedCrop, 512, 512, true)
         val pixels = IntArray(512 * 512)
         inputBitmap.getPixels(pixels, 0, 512, 0, 0, 512, 512)
         val floats = FloatArray(3 * 512 * 512)
@@ -453,6 +481,7 @@ private object GfpganRestorer {
             }
         }
 
+        val restoredPixels: IntArray
         val env = OrtEnvironment.getEnvironment()
         val options = OrtSession.SessionOptions()
         options.setIntraOpNumThreads(2)
@@ -461,7 +490,7 @@ private object GfpganRestorer {
                 session.run(mapOf(session.inputNames.first() to tensor)).use { result ->
                     @Suppress("UNCHECKED_CAST")
                     val output = result[0].value as Array<Array<Array<FloatArray>>>
-                    val restoredPixels = IntArray(512 * 512)
+                    restoredPixels = IntArray(512 * 512)
                     for (y in 0 until 512) {
                         for (x in 0 until 512) {
                             val i = y * 512 + x
@@ -471,51 +500,65 @@ private object GfpganRestorer {
                             restoredPixels[i] = Color.rgb(r, g, b)
                         }
                     }
-
-                    val restored512 = Bitmap.createBitmap(restoredPixels, 512, 512, Bitmap.Config.ARGB_8888)
-                    val restoredCrop = Bitmap.createScaledBitmap(restored512, size, size, true)
-                    val outputBitmap = src.copy(Bitmap.Config.ARGB_8888, true)
-                    val originalPixels = IntArray(size * size)
-                    val restored = IntArray(size * size)
-                    crop.getPixels(originalPixels, 0, size, 0, 0, size, size)
-                    restoredCrop.getPixels(restored, 0, size, 0, 0, size, size)
-
-                    val amount = blend.coerceIn(0f, 1f)
-                    val center = (size - 1) / 2f
-                    val radiusX = size * 0.49f
-                    val radiusY = size * 0.49f
-                    for (y in 0 until size) {
-                        for (x in 0 until size) {
-                            val i = y * size + x
-                            val dx = (x - center) / radiusX
-                            val dy = (y - center) / radiusY
-                            val distance = kotlin.math.sqrt(dx * dx + dy * dy)
-                            // Keep the middle of the crop, fade smoothly near the border.
-                            val mask = when {
-                                distance <= 0.72f -> 1f
-                                distance >= 1f -> 0f
-                                else -> {
-                                    val t = ((1f - distance) / (1f - 0.72f)).coerceIn(0f, 1f)
-                                    t * t * (3f - 2f * t)
-                                }
-                            }
-                            val alpha = amount * mask
-                            if (alpha <= 0f) continue
-                            val a = originalPixels[i]
-                            val b = restored[i]
-                            fun mix(c1: Int, c2: Int) =
-                                (c1 + (c2 - c1) * alpha).toInt().coerceIn(0, 255)
-                            originalPixels[i] = Color.rgb(
-                                mix(Color.red(a), Color.red(b)),
-                                mix(Color.green(a), Color.green(b)),
-                                mix(Color.blue(a), Color.blue(b))
-                            )
-                        }
-                    }
-                    outputBitmap.setPixels(originalPixels, 0, size, left, top, size, size)
-                    return outputBitmap
                 }
             }
         }
+
+        val restored512 = Bitmap.createBitmap(restoredPixels, 512, 512, Bitmap.Config.ARGB_8888)
+        val restoredCrop = Bitmap.createScaledBitmap(restored512, side, side, true)
+        val outputBitmap = src.copy(Bitmap.Config.ARGB_8888, true)
+
+        // Rotate the restored crop back into the original image coordinates.
+        val overlay = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        val overlayCanvas = android.graphics.Canvas(overlay)
+        overlayCanvas.save()
+        overlayCanvas.rotate(face.headEulerAngleZ, cx, cy)
+        overlayCanvas.drawBitmap(restoredCrop, cx - half, cy - half, null)
+        overlayCanvas.restore()
+
+        // Blend only around the detected face, with a soft elliptical boundary.
+        val left = (cx - side).toInt().coerceAtLeast(0)
+        val top = (cy - side).toInt().coerceAtLeast(0)
+        val right = (cx + side).toInt().coerceAtMost(src.width)
+        val bottom = (cy + side).toInt().coerceAtMost(src.height)
+        val width = right - left
+        val height = bottom - top
+        val originalRegion = IntArray(width * height)
+        val overlayRegion = IntArray(width * height)
+        outputBitmap.getPixels(originalRegion, 0, width, left, top, width, height)
+        overlay.getPixels(overlayRegion, 0, width, left, top, width, height)
+        val amount = blend.coerceIn(0f, 1f)
+        val rx = (faceW * 0.95f).coerceAtLeast(1f)
+        val ry = (faceH * 0.95f).coerceAtLeast(1f)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val i = y * width + x
+                val p = overlayRegion[i]
+                val px = left + x + 0.5f
+                val py = top + y + 0.5f
+                val dx = (px - cx) / rx
+                val dy = (py - cy) / ry
+                val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+                val mask = when {
+                    distance <= 0.72f -> 1f
+                    distance >= 1f -> 0f
+                    else -> {
+                        val t = ((1f - distance) / 0.28f).coerceIn(0f, 1f)
+                        t * t * (3f - 2f * t)
+                    }
+                }
+                val alpha = amount * mask * (Color.alpha(p) / 255f)
+                if (alpha <= 0f) continue
+                val a = originalRegion[i]
+                fun mix(c1: Int, c2: Int) = (c1 + (c2 - c1) * alpha).toInt().coerceIn(0, 255)
+                originalRegion[i] = Color.rgb(
+                    mix(Color.red(a), Color.red(p)),
+                    mix(Color.green(a), Color.green(p)),
+                    mix(Color.blue(a), Color.blue(p))
+                )
+            }
+        }
+        outputBitmap.setPixels(originalRegion, 0, width, left, top, width, height)
+        return outputBitmap
     }
 }
