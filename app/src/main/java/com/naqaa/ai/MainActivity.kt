@@ -75,7 +75,7 @@ private fun NaqaaApp() {
             .getLong("total", 340_000_000L))
     }
     var status by remember { mutableStateOf("اختر صورة للبدء") }
-    var strength by remember { mutableFloatStateOf(0.8f) }
+    var strength by remember { mutableFloatStateOf(0.25f) }
     val modelFile = remember { File(context.filesDir, "gfpgan_v14.onnx") }
     var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 300_000_000L) }
 
@@ -235,7 +235,7 @@ private fun NaqaaApp() {
                                 }
                             }
                         }
-                        Text("ترميم GFPGAN يعيد بناء تفاصيل الوجه تقديريًا. للحصول على أفضل نتيجة استخدم صورة وجه قريبة ومتمركزة.",
+                        Text("ترميم GFPGAN يعيد بناء تفاصيل الوجه تقديريًا وقد يغيّر الملامح. ابدأ بقوة منخفضة، واستخدم صورة وجه قريبة ومتمركزة؛ لا توجد في هذه النسخة محاذاة تلقائية للوجه.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.secondary,
                             modifier = Modifier.padding(top = 8.dp))
