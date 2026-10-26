@@ -481,7 +481,7 @@ private object GfpganRestorer {
             }
         }
 
-        val restoredPixels: IntArray
+        val restoredPixels = IntArray(512 * 512)
         val env = OrtEnvironment.getEnvironment()
         val options = OrtSession.SessionOptions()
         options.setIntraOpNumThreads(2)
@@ -490,7 +490,6 @@ private object GfpganRestorer {
                 session.run(mapOf(session.inputNames.first() to tensor)).use { result ->
                     @Suppress("UNCHECKED_CAST")
                     val output = result[0].value as Array<Array<Array<FloatArray>>>
-                    restoredPixels = IntArray(512 * 512)
                     for (y in 0 until 512) {
                         for (x in 0 until 512) {
                             val i = y * 512 + x
