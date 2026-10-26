@@ -3,6 +3,8 @@
     <application
         android:allowBackup="false"
         android:label="نقاء AI"
+        android:icon="@drawable/ic_naqaa_launcher"
+        android:roundIcon="@drawable/ic_naqaa_launcher"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
