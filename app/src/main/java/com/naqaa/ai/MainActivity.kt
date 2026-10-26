@@ -427,9 +427,10 @@ private const val GFP_GAN_URL =
     "https://huggingface.co/ykk648/face_lib/resolve/main/face_restore/gfpgan/GFPGANv1.4.onnx"
 
 /**
- * GFPGAN v1.4 ONNX inference. The model expects a 512x512 face-like crop
- * normalized to [-1,1]. This MVP uses a centered square crop, so a close-up,
- * centered face gives the best result; it is not a full face-detection/alignment pipeline.
+ * GFPGAN v1.4 ONNX inference.
+ * This MVP keeps the centered square crop, but softly feathers the blend around
+ * its perimeter so the restored square does not visibly overwrite the whole crop.
+ * It does not detect or align faces automatically.
  */
 private object GfpganRestorer {
     fun restore(src: Bitmap, model: File, blend: Float): Bitmap {
@@ -470,6 +471,7 @@ private object GfpganRestorer {
                             restoredPixels[i] = Color.rgb(r, g, b)
                         }
                     }
+
                     val restored512 = Bitmap.createBitmap(restoredPixels, 512, 512, Bitmap.Config.ARGB_8888)
                     val restoredCrop = Bitmap.createScaledBitmap(restored512, size, size, true)
                     val outputBitmap = src.copy(Bitmap.Config.ARGB_8888, true)
@@ -477,16 +479,38 @@ private object GfpganRestorer {
                     val restored = IntArray(size * size)
                     crop.getPixels(originalPixels, 0, size, 0, 0, size, size)
                     restoredCrop.getPixels(restored, 0, size, 0, 0, size, size)
+
                     val amount = blend.coerceIn(0f, 1f)
-                    for (i in originalPixels.indices) {
-                        val a = originalPixels[i]
-                        val b = restored[i]
-                        fun mix(c1: Int, c2: Int) = (c1 + (c2 - c1) * amount).toInt().coerceIn(0, 255)
-                        originalPixels[i] = Color.rgb(
-                            mix(Color.red(a), Color.red(b)),
-                            mix(Color.green(a), Color.green(b)),
-                            mix(Color.blue(a), Color.blue(b))
-                        )
+                    val center = (size - 1) / 2f
+                    val radiusX = size * 0.49f
+                    val radiusY = size * 0.49f
+                    for (y in 0 until size) {
+                        for (x in 0 until size) {
+                            val i = y * size + x
+                            val dx = (x - center) / radiusX
+                            val dy = (y - center) / radiusY
+                            val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+                            // Keep the middle of the crop, fade smoothly near the border.
+                            val mask = when {
+                                distance <= 0.72f -> 1f
+                                distance >= 1f -> 0f
+                                else -> {
+                                    val t = ((1f - distance) / (1f - 0.72f)).coerceIn(0f, 1f)
+                                    t * t * (3f - 2f * t)
+                                }
+                            }
+                            val alpha = amount * mask
+                            if (alpha <= 0f) continue
+                            val a = originalPixels[i]
+                            val b = restored[i]
+                            fun mix(c1: Int, c2: Int) =
+                                (c1 + (c2 - c1) * alpha).toInt().coerceIn(0, 255)
+                            originalPixels[i] = Color.rgb(
+                                mix(Color.red(a), Color.red(b)),
+                                mix(Color.green(a), Color.green(b)),
+                                mix(Color.blue(a), Color.blue(b))
+                            )
+                        }
                     }
                     outputBitmap.setPixels(originalPixels, 0, size, left, top, size, size)
                     return outputBitmap
