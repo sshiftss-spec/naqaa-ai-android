@@ -7,6 +7,14 @@ import android.net.Uri
 import android.content.ContentValues
 import android.os.Build
 import android.provider.MediaStore
+import java.io.File
+import java.net.URL
+import java.io.BufferedInputStream
+import java.io.FileOutputStream
+import java.nio.FloatBuffer
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -54,6 +62,8 @@ private fun NaqaaApp() {
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("اختر صورة للبدء") }
     var strength by remember { mutableFloatStateOf(0.8f) }
+    val modelFile = remember { File(context.filesDir, "gfpgan_v14.onnx") }
+    var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 300_000_000L) }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
@@ -97,7 +107,7 @@ private fun NaqaaApp() {
                     Column {
                         Text("نقاء AI", style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold)
-                        Text("تحسين الصور واستعادة الوضوح", style = MaterialTheme.typography.bodyMedium,
+                        Text("ترميم الوجوه بالذكاء الاصطناعي", style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.secondary)
                     }
                 }
@@ -188,13 +198,13 @@ private fun NaqaaApp() {
                                 }
                             }
                         }
-                        Text("النتيجة حدة محلية تجريبية وليست استعادة بالذكاء الاصطناعي.",
+                        Text("ترميم GFPGAN يعيد بناء تفاصيل الوجه تقديريًا. للحصول على أفضل نتيجة استخدم صورة وجه قريبة ومتمركزة.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.secondary,
                             modifier = Modifier.padding(top = 8.dp))
                     }
                     Spacer(Modifier.height(18.dp))
-                    Text("قوة التحسين: ${(strength * 100).toInt()}%",
+                    Text("قوة دمج الترميم: ${(strength * 100).toInt()}%",
                         modifier = Modifier.align(Alignment.Start))
                     Slider(value = strength, onValueChange = { strength = it })
                     Button(
@@ -204,18 +214,30 @@ private fun NaqaaApp() {
                             val source = original ?: return@Button
                             scope.launch {
                                 busy = true
-                                status = "جارٍ تحسين الصورة محليًا..."
-                                enhanced = withContext(Dispatchers.Default) {
-                                    LocalEnhancer.enhance(source, strength)
+                                try {
+                                    if (!modelReady) {
+                                        status = "جارٍ تنزيل نموذج GFPGAN (حوالي 340 ميغابايت)... يلزم الإنترنت لهذه الخطوة فقط"
+                                        withContext(Dispatchers.IO) { downloadGfpganModel(modelFile) }
+                                        modelReady = true
+                                        status = "تم تنزيل النموذج. أصبح جاهزًا للعمل دون إنترنت."
+                                    } else {
+                                        status = "جارٍ ترميم الوجه على الهاتف..."
+                                        enhanced = withContext(Dispatchers.Default) {
+                                            GfpganRestorer.restore(source, modelFile, strength)
+                                        }
+                                        status = "اكتمل ترميم الوجه محليًا دون رفع الصورة"
+                                    }
+                                } catch (e: Exception) {
+                                    status = "تعذّر إكمال العملية: ${e.message ?: "خطأ غير معروف"}"
+                                } finally {
+                                    busy = false
                                 }
-                                status = "اكتمل التحسين المحلي التجريبي"
-                                busy = false
                             }
                         }
                     ) {
                         Icon(Icons.Default.AutoFixHigh, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("تحسين محلي تجريبي")
+                        Text(if (modelReady) "ترميم الوجه بالذكاء الاصطناعي" else "تنزيل نموذج الترميم (340 MB)")
                     }
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
@@ -278,7 +300,7 @@ private fun NaqaaApp() {
                     color = MaterialTheme.colorScheme.secondary,
                     textAlign = TextAlign.Center)
                 Spacer(Modifier.height(24.dp))
-                Text("نسخة أولية • 0.1.0", style = MaterialTheme.typography.labelSmall,
+                Text("نسخة تجريبية • ترميم الوجه دون إنترنت بعد تنزيل النموذج", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -318,58 +340,99 @@ private fun saveBitmapToGallery(context: android.content.Context, bitmap: Bitmap
     }
 }
 
+private const val GFP_GAN_URL =
+    "https://huggingface.co/ykk648/face_lib/resolve/main/face_restore/gfpgan/GFPGANv1.4.onnx"
+
+private fun downloadGfpganModel(destination: File) {
+    val temp = File(destination.parentFile, destination.name + ".download")
+    val connection = URL(GFP_GAN_URL).openConnection().apply {
+        connectTimeout = 20_000
+        readTimeout = 60_000
+        setRequestProperty("User-Agent", "NaqaaAI-Android")
+    }
+    try {
+        BufferedInputStream(connection.getInputStream()).use { input ->
+            FileOutputStream(temp).use { output -> input.copyTo(output, 1024 * 1024) }
+        }
+        if (temp.length() < 300_000_000L) {
+            throw IllegalStateException("ملف النموذج غير مكتمل؛ أعد التنزيل")
+        }
+        if (destination.exists()) destination.delete()
+        if (!temp.renameTo(destination)) throw IllegalStateException("تعذر حفظ ملف النموذج")
+    } catch (e: Exception) {
+        temp.delete()
+        throw e
+    } finally {
+        connection.getInputStream().close()
+    }
+}
+
 /**
- * Simple on-device unsharp-mask prototype.
- * This is not a trained face-restoration model and cannot recover lost detail.
+ * GFPGAN v1.4 ONNX inference. The model expects a 512x512 face-like crop
+ * normalized to [-1,1]. This MVP uses a centered square crop, so a close-up,
+ * centered face gives the best result; it is not a full face-detection/alignment pipeline.
  */
-private object LocalEnhancer {
-    fun enhance(src: Bitmap, amount: Float): Bitmap {
-        val maxSide = 1600
-        val scale = minOf(1f, maxSide.toFloat() / maxOf(src.width, src.height))
-        val input = if (scale < 1f) Bitmap.createScaledBitmap(
-            src, (src.width * scale).toInt().coerceAtLeast(1),
-            (src.height * scale).toInt().coerceAtLeast(1), true
-        ) else src
-
-        val w = input.width
-        val h = input.height
-        val pixels = IntArray(w * h)
-        input.getPixels(pixels, 0, w, 0, 0, w, h)
-        val out = pixels.copyOf()
-        // A stronger 3x3 Gaussian unsharp mask. Higher strength makes edge/detail
-        // differences more visible while retaining the original image dimensions.
-        val a = amount.coerceIn(0f, 1f) * 3.0f
-
-        for (y in 1 until h - 1) {
-            for (x in 1 until w - 1) {
-                val i = y * w + x
-                val center = pixels[i]
-                val topLeft = pixels[i - w - 1]
-                val top = pixels[i - w]
-                val topRight = pixels[i - w + 1]
-                val left = pixels[i - 1]
-                val right = pixels[i + 1]
-                val bottomLeft = pixels[i + w - 1]
-                val bottom = pixels[i + w]
-                val bottomRight = pixels[i + w + 1]
-
-                fun channel(c: (Int) -> Int): Int {
-                    val base = c(center)
-                    val weightedBlur = (
-                        c(topLeft) + 2 * c(top) + c(topRight) +
-                        2 * c(left) + 4 * base + 2 * c(right) +
-                        c(bottomLeft) + 2 * c(bottom) + c(bottomRight)
-                    ) / 16f
-                    return (base + a * (base - weightedBlur)).toInt().coerceIn(0, 255)
-                }
-                out[i] = Color.argb(
-                    Color.alpha(center),
-                    channel { Color.red(it) },
-                    channel { Color.green(it) },
-                    channel { Color.blue(it) }
-                )
+private object GfpganRestorer {
+    fun restore(src: Bitmap, model: File, blend: Float): Bitmap {
+        val size = minOf(src.width, src.height)
+        require(size >= 64) { "الصورة صغيرة جدًا للترميم" }
+        val left = (src.width - size) / 2
+        val top = (src.height - size) / 2
+        val crop = Bitmap.createBitmap(src, left, top, size, size)
+        val inputBitmap = Bitmap.createScaledBitmap(crop, 512, 512, true)
+        val pixels = IntArray(512 * 512)
+        inputBitmap.getPixels(pixels, 0, 512, 0, 0, 512, 512)
+        val floats = FloatArray(3 * 512 * 512)
+        for (y in 0 until 512) {
+            for (x in 0 until 512) {
+                val p = pixels[y * 512 + x]
+                val i = y * 512 + x
+                floats[i] = (Color.red(p) / 127.5f) - 1f
+                floats[512 * 512 + i] = (Color.green(p) / 127.5f) - 1f
+                floats[2 * 512 * 512 + i] = (Color.blue(p) / 127.5f) - 1f
             }
         }
-        return Bitmap.createBitmap(out, w, h, Bitmap.Config.ARGB_8888)
+
+        val env = OrtEnvironment.getEnvironment()
+        val options = OrtSession.SessionOptions()
+        options.setIntraOpNumThreads(2)
+        env.createSession(model.absolutePath, options).use { session ->
+            OnnxTensor.createTensor(env, FloatBuffer.wrap(floats), longArrayOf(1, 3, 512, 512)).use { tensor ->
+                session.run(mapOf(session.inputNames.first() to tensor)).use { result ->
+                    @Suppress("UNCHECKED_CAST")
+                    val output = result[0].value as Array<Array<Array<FloatArray>>>
+                    val restoredPixels = IntArray(512 * 512)
+                    for (y in 0 until 512) {
+                        for (x in 0 until 512) {
+                            val i = y * 512 + x
+                            val r = ((output[0][0][y][x] + 1f) * 127.5f).toInt().coerceIn(0, 255)
+                            val g = ((output[0][1][y][x] + 1f) * 127.5f).toInt().coerceIn(0, 255)
+                            val b = ((output[0][2][y][x] + 1f) * 127.5f).toInt().coerceIn(0, 255)
+                            restoredPixels[i] = Color.rgb(r, g, b)
+                        }
+                    }
+                    val restored512 = Bitmap.createBitmap(restoredPixels, 512, 512, Bitmap.Config.ARGB_8888)
+                    val restoredCrop = Bitmap.createScaledBitmap(restored512, size, size, true)
+                    val outputBitmap = src.copy(Bitmap.Config.ARGB_8888, true)
+                    val originalPixels = IntArray(size * size)
+                    val restored = IntArray(size * size)
+                    crop.getPixels(originalPixels, 0, size, 0, 0, size, size)
+                    restoredCrop.getPixels(restored, 0, size, 0, 0, size, size)
+                    val amount = blend.coerceIn(0f, 1f)
+                    for (i in originalPixels.indices) {
+                        val a = originalPixels[i]
+                        val b = restored[i]
+                        fun mix(c1: Int, c2: Int) = (c1 + (c2 - c1) * amount).toInt().coerceIn(0, 255)
+                        originalPixels[i] = Color.rgb(
+                            mix(Color.red(a), Color.red(b)),
+                            mix(Color.green(a), Color.green(b)),
+                            mix(Color.blue(a), Color.blue(b))
+                        )
+                    }
+                    outputBitmap.setPixels(originalPixels, 0, size, left, top, size, size)
+                    return outputBitmap
+                }
+            }
+        }
     }
 }
