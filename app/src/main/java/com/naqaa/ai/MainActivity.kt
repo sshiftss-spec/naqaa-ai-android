@@ -362,8 +362,6 @@ private fun downloadGfpganModel(destination: File) {
     } catch (e: Exception) {
         temp.delete()
         throw e
-    } finally {
-        connection.getInputStream().close()
     }
 }
 
