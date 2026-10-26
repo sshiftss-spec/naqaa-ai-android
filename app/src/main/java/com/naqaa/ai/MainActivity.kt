@@ -60,6 +60,9 @@ private fun NaqaaApp() {
     var original by remember { mutableStateOf<Bitmap?>(null) }
     var enhanced by remember { mutableStateOf<Bitmap?>(null) }
     var busy by remember { mutableStateOf(false) }
+    var modelDownloading by remember { mutableStateOf(false) }
+    var modelDownloadedBytes by remember { mutableStateOf(0L) }
+    var modelTotalBytes by remember { mutableStateOf(340_000_000L) }
     var status by remember { mutableStateOf("اختر صورة للبدء") }
     var strength by remember { mutableFloatStateOf(0.8f) }
     val modelFile = remember { File(context.filesDir, "gfpgan_v14.onnx") }
@@ -216,10 +219,25 @@ private fun NaqaaApp() {
                                 busy = true
                                 try {
                                     if (!modelReady) {
-                                        status = "جارٍ تنزيل نموذج GFPGAN (حوالي 340 ميغابايت)... يلزم الإنترنت لهذه الخطوة فقط"
-                                        withContext(Dispatchers.IO) { downloadGfpganModel(modelFile) }
+                                        modelDownloading = true
+                                        modelDownloadedBytes = 0L
+                                        modelTotalBytes = 340_000_000L
+                                        status = "جارٍ الاتصال بخادم النموذج..."
+                                        try {
+                                            withContext(Dispatchers.IO) {
+                                                downloadGfpganModel(modelFile) { downloaded, total ->
+                                                    scope.launch(Dispatchers.Main.immediate) {
+                                                        modelDownloadedBytes = downloaded
+                                                        if (total > 0L) modelTotalBytes = total
+                                                        status = "جارٍ تنزيل نموذج GFPGAN من الإنترنت..."
+                                                    }
+                                                }
+                                            }
+                                        } finally {
+                                            modelDownloading = false
+                                        }
                                         modelReady = true
-                                        status = "تم تنزيل النموذج. أصبح جاهزًا للعمل دون إنترنت."
+                                        status = "اكتمل تنزيل النموذج. أصبح جاهزًا للعمل دون إنترنت."
                                     } else {
                                         status = "جارٍ ترميم الوجه على الهاتف..."
                                         enhanced = withContext(Dispatchers.Default) {
@@ -238,6 +256,43 @@ private fun NaqaaApp() {
                         Icon(Icons.Default.AutoFixHigh, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text(if (modelReady) "ترميم الوجه بالذكاء الاصطناعي" else "تنزيل نموذج الترميم (340 MB)")
+                    }
+                    if (modelDownloading) {
+                        Spacer(Modifier.height(12.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Text("تنزيل نموذج الذكاء الاصطناعي", fontWeight = FontWeight.SemiBold)
+                                }
+                                Spacer(Modifier.height(12.dp))
+                                val progress = (modelDownloadedBytes.toFloat() /
+                                    modelTotalBytes.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
+                                LinearProgressIndicator(
+                                    progress = { progress },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "${"%.1f".format(java.util.Locale.US, modelDownloadedBytes / 1_000_000.0)} MB من " +
+                                        "${"%.1f".format(java.util.Locale.US, modelTotalBytes / 1_000_000.0)} MB  •  ${(progress * 100).toInt()}%",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    "يتحدّث العداد مع وصول البيانات فعليًا من الإنترنت. أبقِ التطبيق مفتوحًا حتى يكتمل التنزيل.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
@@ -343,7 +398,7 @@ private fun saveBitmapToGallery(context: android.content.Context, bitmap: Bitmap
 private const val GFP_GAN_URL =
     "https://huggingface.co/ykk648/face_lib/resolve/main/face_restore/gfpgan/GFPGANv1.4.onnx"
 
-private fun downloadGfpganModel(destination: File) {
+private fun downloadGfpganModel(destination: File, onProgress: (Long, Long) -> Unit) {
     val temp = File(destination.parentFile, destination.name + ".download")
     val connection = URL(GFP_GAN_URL).openConnection().apply {
         connectTimeout = 20_000
@@ -351,8 +406,27 @@ private fun downloadGfpganModel(destination: File) {
         setRequestProperty("User-Agent", "NaqaaAI-Android")
     }
     try {
-        BufferedInputStream(connection.getInputStream()).use { input ->
-            FileOutputStream(temp).use { output -> input.copyTo(output, 1024 * 1024) }
+        connection.getInputStream().use { rawInput ->
+            BufferedInputStream(rawInput).use { input ->
+                FileOutputStream(temp).use { output ->
+                    val declaredLength = connection.contentLengthLong
+                    val totalBytes = if (declaredLength > 0L) declaredLength else 340_000_000L
+                    val buffer = ByteArray(1024 * 1024)
+                    var downloaded = 0L
+                    var lastReported = 0L
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                        downloaded += count
+                        if (downloaded - lastReported >= 1024 * 1024 || downloaded == totalBytes) {
+                            onProgress(downloaded, totalBytes)
+                            lastReported = downloaded
+                        }
+                    }
+                    onProgress(downloaded, totalBytes)
+                }
+            }
         }
         if (temp.length() < 300_000_000L) {
             throw IllegalStateException("ملف النموذج غير مكتمل؛ أعد التنزيل")
