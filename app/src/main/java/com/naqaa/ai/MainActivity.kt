@@ -336,19 +336,31 @@ private object LocalEnhancer {
         val pixels = IntArray(w * h)
         input.getPixels(pixels, 0, w, 0, 0, w, h)
         val out = pixels.copyOf()
-        val a = amount.coerceIn(0f, 1f) * 1.15f
+        // A stronger 3x3 Gaussian unsharp mask. Higher strength makes edge/detail
+        // differences more visible while retaining the original image dimensions.
+        val a = amount.coerceIn(0f, 1f) * 3.0f
 
         for (y in 1 until h - 1) {
             for (x in 1 until w - 1) {
                 val i = y * w + x
                 val center = pixels[i]
-                val neighbors = intArrayOf(
-                    pixels[i - w], pixels[i + w], pixels[i - 1], pixels[i + 1]
-                )
+                val topLeft = pixels[i - w - 1]
+                val top = pixels[i - w]
+                val topRight = pixels[i - w + 1]
+                val left = pixels[i - 1]
+                val right = pixels[i + 1]
+                val bottomLeft = pixels[i + w - 1]
+                val bottom = pixels[i + w]
+                val bottomRight = pixels[i + w + 1]
+
                 fun channel(c: (Int) -> Int): Int {
                     val base = c(center)
-                    val blur = neighbors.sumOf { c(it) } / 4
-                    return (base + a * (base - blur)).toInt().coerceIn(0, 255)
+                    val weightedBlur = (
+                        c(topLeft) + 2 * c(top) + c(topRight) +
+                        2 * c(left) + 4 * base + 2 * c(right) +
+                        c(bottomLeft) + 2 * c(bottom) + c(bottomRight)
+                    ) / 16f
+                    return (base + a * (base - weightedBlur)).toInt().coerceIn(0, 255)
                 }
                 out[i] = Color.argb(
                     Color.alpha(center),
