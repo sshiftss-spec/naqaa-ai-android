@@ -80,7 +80,6 @@ private fun NaqaaApp() {
     var wholeImageSharpness by remember { mutableFloatStateOf(0.55f) }
     val modelFile = remember { File(context.filesDir, "restoreformer_pp.onnx") }
     var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 100_000_000L) }
-    val deblurModelFile = remember { File(context.filesDir, "rt_focuser_wint8_afp32.onnx") }
 
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
@@ -244,7 +243,7 @@ private fun NaqaaApp() {
                             modifier = Modifier.padding(top = 8.dp))
                     }
                     Spacer(Modifier.height(18.dp))
-                    Text("حدة إضافية بعد إزالة الضبابية: ${(wholeImageSharpness * 100).toInt()}%",
+                    Text("تحسين وضوح كامل الصورة: ${(wholeImageSharpness * 100).toInt()}%",
                         modifier = Modifier.align(Alignment.Start))
                     Slider(
                         value = wholeImageSharpness,
@@ -252,7 +251,7 @@ private fun NaqaaApp() {
                         valueRange = 0f..1f
                     )
                     Text(
-                        "هذا شحذ إضافي فقط؛ إزالة الضبابية الأساسية تتم بنموذج ذكاء اصطناعي منفصل.",
+                        "يؤثر على الشعر والجسم والملابس والخلفية، وليس الوجه فقط.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.secondary
                     )
@@ -279,18 +278,11 @@ private fun NaqaaApp() {
                                             status = "التنزيل مستمر في الخلفية؛ يمكنك استخدام تطبيق آخر."
                                         }
                                     } else {
-                                        status = "جارٍ تجهيز نموذج إزالة الضبابية للصورة كاملة..."
-                                        val deblurred = withContext(Dispatchers.IO) {
-                                            FullFrameDeblurRestorer.ensureModel(deblurModelFile)
-                                            withContext(Dispatchers.Default) {
-                                                FullFrameDeblurRestorer.restore(source, deblurModelFile)
-                                            }
-                                        }
-                                        status = "أُزيلت ضبابية الإطار؛ جارٍ ترميم الوجه بنسبة ${(strength * 100).toInt()}%..."
+                                        status = "جارٍ ترميم الوجه على الهاتف..."
                                         enhanced = withContext(Dispatchers.Default) {
-                                            RestoreFormerRestorer.restore(deblurred, modelFile, strength, 0f)
+                                            RestoreFormerRestorer.restore(source, modelFile, strength, wholeImageSharpness)
                                         }
-                                        status = "اكتملت المعالجة المحلية للصورة كاملة. نموذج إزالة الضبابية تجريبي ومخصص أساسًا لضبابية الحركة."
+                                        status = "اكتمل ترميم الوجه محليًا دون رفع الصورة"
                                     }
                                 } catch (e: Exception) {
                                     status = "تعذّر إكمال العملية: ${e.message ?: "خطأ غير معروف"}"
@@ -303,7 +295,7 @@ private fun NaqaaApp() {
                         Icon(Icons.Default.AutoFixHigh, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            if (modelReady) "إزالة الضبابية وترميم الوجه بالذكاء الاصطناعي"
+                            if (modelReady) "ترميم الوجه بالذكاء الاصطناعي"
                             else if (modelDownloading) "التنزيل مستمر في الخلفية"
                             else "تنزيل نموذج الترميم (148 MB)"
                         )
