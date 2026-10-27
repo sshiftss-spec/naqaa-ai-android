@@ -77,7 +77,7 @@ private fun NaqaaApp() {
     }
     var status by remember { mutableStateOf("اختر صورة للبدء") }
     var strength by remember { mutableFloatStateOf(0.25f) }
-    val modelFile = remember { File(context.filesDir, "gfpgan_v14.onnx") }
+    val modelFile = remember { File(context.filesDir, "restoreformer_pp.onnx") }
     var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 300_000_000L) }
 
     LaunchedEffect(Unit) {
@@ -88,7 +88,7 @@ private fun NaqaaApp() {
             modelTotalBytes = prefs.getLong("total", 340_000_000L).coerceAtLeast(1L)
             modelDownloading = downloadState == "downloading"
             when (downloadState) {
-                "downloading" -> status = "جارٍ تنزيل نموذج GFPGAN في الخلفية..."
+                "downloading" -> status = "جارٍ تنزيل نموذج RestoreFormer++ في الخلفية..."
                 "completed" -> {
                     if (modelFile.exists() && modelFile.length() > 300_000_000L) {
                         modelReady = true
@@ -236,7 +236,7 @@ private fun NaqaaApp() {
                                 }
                             }
                         }
-                        Text("يكتشف التطبيق أكبر وجه في الصورة ويحاول تصحيح ميله قبل الترميم. قد تتغير بعض الملامح لأن GFPGAN يعيد بناء التفاصيل تقديريًا.",
+                        Text("يكتشف التطبيق أكبر وجه في الصورة ويحاول تصحيح ميله قبل الترميم. قد تتغير بعض الملامح لأن نموذج الترميم يعيد بناء التفاصيل تقديريًا.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.secondary,
                             modifier = Modifier.padding(top = 8.dp))
@@ -266,7 +266,7 @@ private fun NaqaaApp() {
                                     } else {
                                         status = "جارٍ ترميم الوجه على الهاتف..."
                                         enhanced = withContext(Dispatchers.Default) {
-                                            GfpganRestorer.restore(source, modelFile, strength)
+                                            RestoreFormerRestorer.restore(source, modelFile, strength)
                                         }
                                         status = "اكتمل ترميم الوجه محليًا دون رفع الصورة"
                                     }
@@ -283,7 +283,7 @@ private fun NaqaaApp() {
                         Text(
                             if (modelReady) "ترميم الوجه بالذكاء الاصطناعي"
                             else if (modelDownloading) "التنزيل مستمر في الخلفية"
-                            else "تنزيل نموذج الترميم (340 MB)"
+                            else "تنزيل نموذج الترميم (148 MB)"
                         )
                     }
                     if (modelDownloading) {
@@ -424,15 +424,15 @@ private fun saveBitmapToGallery(context: android.content.Context, bitmap: Bitmap
     }
 }
 
-private const val GFP_GAN_URL =
-    "https://huggingface.co/ykk648/face_lib/resolve/main/face_restore/gfpgan/GFPGANv1.4.onnx"
+private const val RESTOREFORMER_PP_URL =
+    "https://huggingface.co/Saimon8420/restoreformer-pp-web/resolve/main/restoreformer_pp_fp16w.onnx"
 
 /**
- * Detect the largest face, crop around it, rotate the crop to reduce in-plane tilt,
- * run GFPGAN, then rotate the result back and feather the blend around the detected face.
+ * Experimental RestoreFormer++ inference using the model’s RGB [-1, 1] ONNX interface.
+ * Face crop/placement remains approximate in this preview build; quality must be tested on-device.
  * Falls back with a clear error if no face is detected instead of restoring the image center.
  */
-private object GfpganRestorer {
+private object RestoreFormerRestorer {
     fun restore(src: Bitmap, model: File, blend: Float): Bitmap {
         val detectorOptions = com.google.mlkit.vision.face.FaceDetectorOptions.Builder()
             .setPerformanceMode(com.google.mlkit.vision.face.FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
