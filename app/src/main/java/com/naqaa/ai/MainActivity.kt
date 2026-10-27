@@ -67,26 +67,34 @@ private fun NaqaaApp() {
     var downloadProgress by remember { mutableFloatStateOf(0f) }
     var downloadBytes by remember { mutableLongStateOf(0L) }
     var downloadTotal by remember { mutableLongStateOf(-1L) }
+    var modelMode by remember { mutableStateOf("both") }
+    var compareMode by remember { mutableStateOf(true) }
     val modelFile = remember { File(context.filesDir, "nafnet_deblur.onnx") }
+    val codeFormerFile = remember { File(context.filesDir, "codeformer.onnx") }
     var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 80_000_000L) }
+    var codeFormerReady by remember { mutableStateOf(codeFormerFile.exists() && codeFormerFile.length() > 300_000_000L) }
 
-    // Observe the foreground download service even after returning to the app.
+    // Observe background model downloads and refresh the progress bar when the app returns.
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
         while (true) {
-            val state = prefs.getString("state", "idle") ?: "idle"
-            downloadBytes = prefs.getLong("downloaded", 0L)
-            downloadTotal = prefs.getLong("total", -1L)
-            if (downloadTotal > 0L) {
-                downloadProgress = (downloadBytes.toFloat() / downloadTotal.toFloat()).coerceIn(0f, 1f)
-            }
+            val nafState = prefs.getString("nafnet_state", "idle") ?: "idle"
+            val faceState = prefs.getString("codeformer_state", "idle") ?: "idle"
+            val faceActive = faceState == "downloading"
+            val prefix = if (faceActive) "codeformer_" else "nafnet_"
+            downloadBytes = prefs.getLong(prefix + "downloaded", 0L)
+            downloadTotal = prefs.getLong(prefix + "total", -1L)
+            if (downloadTotal > 0L) downloadProgress = (downloadBytes.toFloat() / downloadTotal.toFloat()).coerceIn(0f, 1f)
             if (modelFile.exists() && modelFile.length() > 80_000_000L) modelReady = true
-            if (state == "downloading" && !modelReady) {
-                status = "جارٍ تنزيل نموذج NAFNet في الخلفية..."
-            } else if (state == "error" && !modelReady) {
-                status = "تعذّر تنزيل النموذج: " + (prefs.getString("error", "خطأ غير معروف") ?: "خطأ غير معروف")
-            } else if (state == "completed" && modelReady && status.contains("تنزيل")) {
-                status = "اكتمل تنزيل النموذج، وهو جاهز للعمل دون إنترنت."
+            if (codeFormerFile.exists() && codeFormerFile.length() > 300_000_000L) codeFormerReady = true
+            if (faceActive) {
+                status = "جارٍ تنزيل CodeFormer في الخلفية..."
+            } else if (nafState == "downloading" && !modelReady) {
+                status = "جارٍ تنزيل NAFNet في الخلفية..."
+            } else if (faceState == "error" && !codeFormerReady) {
+                status = "تعذّر تنزيل CodeFormer: " + (prefs.getString("codeformer_error", "خطأ غير معروف") ?: "خطأ غير معروف")
+            } else if (nafState == "error" && !modelReady) {
+                status = "تعذّر تنزيل NAFNet: " + (prefs.getString("nafnet_error", "خطأ غير معروف") ?: "خطأ غير معروف")
             }
             kotlinx.coroutines.delay(750)
         }
@@ -192,6 +200,16 @@ private fun NaqaaApp() {
                         Text("الأصل — اضغط تحسين لعرض المقارنة",
                             color = MaterialTheme.colorScheme.secondary,
                             modifier = Modifier.padding(top = 8.dp))
+                    } else if (!compareMode) {
+                        Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+                            Image(
+                                bitmap = enhanced!!.asImageBitmap(),
+                                contentDescription = "النتيجة المحسنة",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp)
+                                    .background(androidx.compose.ui.graphics.Color(0xFFE8ECEA))
+                            )
+                        }
                     } else {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -232,7 +250,33 @@ private fun NaqaaApp() {
                     }
                     Spacer(Modifier.height(18.dp))
                     Text(
-                        "إزالة الضبابية من كامل الصورة بنموذج NAFNet: الشعر والجسم والملابس والخلفية.",
+                        "اختر طريقة التحسين",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.align(Alignment.Start)
+                    )
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = modelMode == "both", onClick = { modelMode = "both" })
+                                Column {
+                                    Text("النموذجان معًا (افتراضي)", fontWeight = FontWeight.SemiBold)
+                                    Text("NAFNet للصورة كاملة ثم CodeFormer للوجه", style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = modelMode == "nafnet", onClick = { modelMode = "nafnet" })
+                                Text("NAFNet فقط — الصورة كاملة")
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = modelMode == "codeformer", onClick = { modelMode = "codeformer" })
+                                Text("CodeFormer فقط — ترميم الوجه")
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "NAFNet يعالج الصورة كاملة. CodeFormer يركّز على الوجه وقد يعيد بناء بعض التفاصيل تقديريًا.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.secondary
                     )
@@ -244,41 +288,46 @@ private fun NaqaaApp() {
                             scope.launch {
                                 busy = true
                                 try {
-                                    status = if (modelReady) "جارٍ إزالة الضبابية من كامل الصورة..." else "جارٍ تنزيل نموذج NAFNet في الخلفية..."
+                                    val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
                                     downloadProgress = 0f
-                                    downloadBytes = 0L
-                                    downloadTotal = -1L
-                                    if (!modelReady) {
-                                        val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
-                                        if (prefs.getString("state", "idle") != "downloading") {
-                                            status = "بدء تنزيل نموذج NAFNet في الخلفية..."
-                                            val intent = Intent(context, ModelDownloadService::class.java)
-                                                .setAction(ModelDownloadService.ACTION_START)
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                                context.startForegroundService(intent)
-                                            } else {
-                                                context.startService(intent)
-                                            }
+                                    suspend fun ensureDownloaded(isFaceModel: Boolean) {
+                                        val file = if (isFaceModel) codeFormerFile else modelFile
+                                        val ready = if (isFaceModel) codeFormerReady else modelReady
+                                        val minimum = if (isFaceModel) 300_000_000L else 80_000_000L
+                                        val prefix = if (isFaceModel) "codeformer_" else "nafnet_"
+                                        val action = if (isFaceModel) ModelDownloadService.ACTION_START_CODEFORMER else ModelDownloadService.ACTION_START
+                                        val label = if (isFaceModel) "CodeFormer" else "NAFNet"
+                                        if (ready || (file.exists() && file.length() > minimum)) return
+                                        val state = prefs.getString(prefix + "state", "idle")
+                                        if (state != "downloading") {
+                                            status = "بدء تنزيل $label في الخلفية..."
+                                            val intent = Intent(context, ModelDownloadService::class.java).setAction(action)
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+                                            else context.startService(intent)
                                         }
-                                        while (!modelReady) {
+                                        while (!(file.exists() && file.length() > minimum)) {
                                             kotlinx.coroutines.delay(500)
-                                            val state = prefs.getString("state", "idle")
-                                            if (modelFile.exists() && modelFile.length() > 80_000_000L) {
-                                                modelReady = true
-                                                break
-                                            }
-                                            if (state == "error") {
-                                                throw IllegalStateException(prefs.getString("error", "تعذّر تنزيل النموذج"))
+                                            if (prefs.getString(prefix + "state", "idle") == "error") {
+                                                throw IllegalStateException(prefs.getString(prefix + "error", "تعذّر تنزيل $label"))
                                             }
                                         }
+                                        if (isFaceModel) codeFormerReady = true else modelReady = true
                                     }
-                                    downloadProgress = 1f
-                                    val readyModel = modelFile
-                                    status = "جارٍ معالجة الصورة كاملةً..."
+                                    if (modelMode == "both" || modelMode == "nafnet") ensureDownloaded(false)
+                                    if (modelMode == "both" || modelMode == "codeformer") ensureDownloaded(true)
+                                    status = "جارٍ تطبيق النماذج المختارة..."
                                     enhanced = withContext(Dispatchers.Default) {
-                                        NafNetDeblurRestorer.restore(source, readyModel)
+                                        var result = source
+                                        if (modelMode == "both" || modelMode == "nafnet") {
+                                            result = NafNetDeblurRestorer.restore(result, modelFile)
+                                        }
+                                        if (modelMode == "both" || modelMode == "codeformer") {
+                                            result = CodeFormerRestorer.restore(result, codeFormerFile)
+                                        }
+                                        result
                                     }
-                                    status = "اكتملت معالجة الصورة كاملةً محليًا دون رفعها"
+                                    compareMode = true
+                                    status = "اكتملت المعالجة محليًا. قارن النتيجة بالأصل."
                                 } catch (e: Exception) {
                                     status = "تعذرت إزالة الضبابية: ${e.message ?: "خطأ غير معروف"}"
                                 } finally {
@@ -289,9 +338,19 @@ private fun NaqaaApp() {
                     ) {
                         Icon(Icons.Default.AutoFixHigh, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text(if (modelReady) "إزالة الضبابية من الصورة" else "تنزيل نموذج إزالة الضبابية (92 MB)")
+                        Text(if ((modelMode == "nafnet" && modelReady) || (modelMode == "codeformer" && codeFormerReady) || (modelMode == "both" && modelReady && codeFormerReady)) "ابدأ التحسين" else "تنزيل النماذج المطلوبة بالخلفية")
                     }
                     Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = enhanced != null && !busy,
+                        onClick = {
+                            compareMode = !compareMode
+                        }
+                    ) {
+                        Text(if (compareMode) "عرض النتيجة فقط" else "مقارنة الأصل والنتيجة")
+                    }
                     OutlinedButton(
                         modifier = Modifier.fillMaxWidth(),
                         enabled = enhanced != null && !busy,
@@ -347,7 +406,8 @@ private fun NaqaaApp() {
                     }
                 }
                 Spacer(Modifier.height(14.dp))
-                if (busy && !modelReady && original != null) {
+                val downloadingAnyModel = status.contains("تنزيل") && original != null
+                if (downloadingAnyModel) {
                     LinearProgressIndicator(
                         progress = { downloadProgress },
                         modifier = Modifier.fillMaxWidth()
@@ -356,9 +416,7 @@ private fun NaqaaApp() {
                         val downloadedMb = downloadBytes / (1024L * 1024L)
                         val totalMb = downloadTotal / (1024L * 1024L)
                         "تنزيل النموذج: " + downloadedMb + " / " + totalMb + " MB — " + (downloadProgress * 100).toInt() + "%"
-                    } else {
-                        "جارٍ تنزيل النموذج في الخلفية..."
-                    }
+                    } else "جارٍ تنزيل النموذج في الخلفية..."
                     Text(progressLabel, modifier = Modifier.padding(top = 6.dp), textAlign = TextAlign.Center)
                 } else if (busy) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
