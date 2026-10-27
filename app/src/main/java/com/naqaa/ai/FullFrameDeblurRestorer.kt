@@ -104,7 +104,7 @@ internal object FullFrameDeblurRestorer {
                     ).use { tensor ->
                         session.run(mapOf(inputName to tensor), setOf(outputName)).use { result ->
                             @Suppress("UNCHECKED_CAST")
-                            val values = result[outputName].value as Array<Array<Array<FloatArray>>>
+                            val values = result.get(outputName).get().value as Array<Array<Array<FloatArray>>>
                             val restored = IntArray(TILE * TILE)
                             for (y in 0 until TILE) {
                                 for (x in 0 until TILE) {
