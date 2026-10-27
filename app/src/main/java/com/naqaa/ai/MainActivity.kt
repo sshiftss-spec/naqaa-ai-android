@@ -436,9 +436,10 @@ private object RestoreFormerRestorer {
     private const val SIZE = 512
 
     /**
-     * Gentle whole-frame pass: subtle local sharpening and contrast adjustment.
-     * This is intentionally conservative; it improves the entire photo but does not invent
-     * missing body/clothing/background details like a dedicated general-purpose AI model could.
+     * Whole-frame local deblurring approximation using an unsharp mask and mild contrast.
+     * This runs on every pixel before face restoration, so body, clothing, hair, and background
+     * are also affected. It can reduce mild blur but cannot perfectly invert a strong Gaussian blur
+     * or recover details that were lost; a general-purpose trained deblurring model would be needed.
      * Rows are processed incrementally to avoid allocating several full-resolution pixel arrays.
      */
     private fun enhanceWholeImage(src: Bitmap): Bitmap {
@@ -468,7 +469,7 @@ private object RestoreFormerRestorer {
                     val neighborhood = (
                         channel(left) + channel(right) + channel(up) + channel(down)
                     ) / 4f
-                    val sharpened = center + 0.14f * (center - neighborhood)
+                    val sharpened = center + 0.55f * (center - neighborhood)
                     val contrasted = (sharpened - 127.5f) * 1.025f + 127.5f
                     return contrasted.toInt().coerceIn(0, 255)
                 }
