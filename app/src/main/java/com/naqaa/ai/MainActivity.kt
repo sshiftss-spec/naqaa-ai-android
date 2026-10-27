@@ -63,46 +63,9 @@ private fun NaqaaApp() {
     var original by remember { mutableStateOf<Bitmap?>(null) }
     var enhanced by remember { mutableStateOf<Bitmap?>(null) }
     var busy by remember { mutableStateOf(false) }
-    var modelDownloading by remember {
-        mutableStateOf(context.getSharedPreferences(ModelDownloadService.PREFS, 0)
-            .getString("state", "idle") == "downloading")
-    }
-    var modelDownloadedBytes by remember {
-        mutableStateOf(context.getSharedPreferences(ModelDownloadService.PREFS, 0)
-            .getLong("downloaded", 0L))
-    }
-    var modelTotalBytes by remember {
-        mutableStateOf(context.getSharedPreferences(ModelDownloadService.PREFS, 0)
-            .getLong("total", 148_000_000L))
-    }
     var status by remember { mutableStateOf("اختر صورة للبدء") }
-    var strength by remember { mutableFloatStateOf(0.25f) }
-    var wholeImageSharpness by remember { mutableFloatStateOf(0.55f) }
-    val modelFile = remember { File(context.filesDir, "restoreformer_pp.onnx") }
-    var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 100_000_000L) }
-
-    LaunchedEffect(Unit) {
-        val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
-        while (true) {
-            val downloadState = prefs.getString("state", "idle") ?: "idle"
-            modelDownloadedBytes = prefs.getLong("downloaded", 0L)
-            modelTotalBytes = prefs.getLong("total", 148_000_000L).coerceAtLeast(1L)
-            modelDownloading = downloadState == "downloading"
-            when (downloadState) {
-                "downloading" -> status = "جارٍ تنزيل نموذج RestoreFormer++ في الخلفية..."
-                "completed" -> {
-                    if (modelFile.exists() && modelFile.length() > 100_000_000L) {
-                        modelReady = true
-                        status = "اكتمل تنزيل النموذج. أصبح جاهزًا للعمل دون إنترنت."
-                    }
-                }
-                "error" -> status = "تعذّر تنزيل النموذج: " +
-                    (prefs.getString("error", "خطأ غير معروف") ?: "خطأ غير معروف")
-            }
-            if (modelFile.exists() && modelFile.length() > 100_000_000L) modelReady = true
-            delay(750)
-        }
-    }
+    val modelFile = remember { File(context.filesDir, "nafnet_deblur.onnx") }
+    var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 80_000_000L) }
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
@@ -146,7 +109,7 @@ private fun NaqaaApp() {
                     Column {
                         Text("نقاء AI", style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold)
-                        Text("ترميم الوجوه بالذكاء الاصطناعي", style = MaterialTheme.typography.bodyMedium,
+                        Text("إزالة الضبابية من الصورة كاملة", style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.secondary)
                     }
                 }
@@ -167,7 +130,7 @@ private fun NaqaaApp() {
                                 modifier = Modifier.size(64.dp),
                                 tint = MaterialTheme.colorScheme.primary)
                             Spacer(Modifier.height(14.dp))
-                            Text("ابدأ بصورة وجه أو شخص", fontWeight = FontWeight.SemiBold,
+                            Text("اختر صورة لإزالة الضبابية", fontWeight = FontWeight.SemiBold,
                                 style = MaterialTheme.typography.titleLarge)
                             Spacer(Modifier.height(6.dp))
                             Text("اختر صورة من جهازك. لن يتم رفعها إلى الإنترنت في هذه النسخة.",
@@ -243,22 +206,11 @@ private fun NaqaaApp() {
                             modifier = Modifier.padding(top = 8.dp))
                     }
                     Spacer(Modifier.height(18.dp))
-                    Text("تحسين وضوح كامل الصورة: ${(wholeImageSharpness * 100).toInt()}%",
-                        modifier = Modifier.align(Alignment.Start))
-                    Slider(
-                        value = wholeImageSharpness,
-                        onValueChange = { wholeImageSharpness = it },
-                        valueRange = 0f..1f
-                    )
                     Text(
-                        "يؤثر على الشعر والجسم والملابس والخلفية، وليس الوجه فقط.",
+                        "إزالة الضبابية من كامل الصورة بنموذج NAFNet: الشعر والجسم والملابس والخلفية.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.secondary
                     )
-                    Spacer(Modifier.height(8.dp))
-                    Text("قوة دمج ترميم الوجه: ${(strength * 100).toInt()}%",
-                        modifier = Modifier.align(Alignment.Start))
-                    Slider(value = strength, onValueChange = { strength = it })
                     Button(
                         modifier = Modifier.fillMaxWidth().height(52.dp),
                         enabled = !busy,
@@ -267,25 +219,18 @@ private fun NaqaaApp() {
                             scope.launch {
                                 busy = true
                                 try {
-                                    if (!modelReady) {
-                                        val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
-                                        if (prefs.getString("state", "idle") != "downloading") {
-                                            status = "بدء تنزيل النموذج في الخلفية..."
-                                            val downloadIntent = Intent(context, ModelDownloadService::class.java)
-                                                .setAction(ModelDownloadService.ACTION_START)
-                                            context.startForegroundService(downloadIntent)
-                                        } else {
-                                            status = "التنزيل مستمر في الخلفية؛ يمكنك استخدام تطبيق آخر."
-                                        }
-                                    } else {
-                                        status = "جارٍ ترميم الوجه على الهاتف..."
-                                        enhanced = withContext(Dispatchers.Default) {
-                                            RestoreFormerRestorer.restore(source, modelFile, strength, wholeImageSharpness)
-                                        }
-                                        status = "اكتمل ترميم الوجه محليًا دون رفع الصورة"
+                                    status = if (modelReady) "جارٍ إزالة الضبابية من كامل الصورة..." else "جارٍ تنزيل نموذج NAFNet (نحو 92 MB)..."
+                                    val readyModel = withContext(Dispatchers.IO) {
+                                        NafNetDeblurRestorer.ensureModel(context.filesDir)
                                     }
+                                    modelReady = true
+                                    status = "جارٍ معالجة الصورة كاملةً..."
+                                    enhanced = withContext(Dispatchers.Default) {
+                                        NafNetDeblurRestorer.restore(source, readyModel)
+                                    }
+                                    status = "اكتملت معالجة الصورة كاملةً محليًا دون رفعها"
                                 } catch (e: Exception) {
-                                    status = "تعذّر إكمال العملية: ${e.message ?: "خطأ غير معروف"}"
+                                    status = "تعذرت إزالة الضبابية: ${e.message ?: "خطأ غير معروف"}"
                                 } finally {
                                     busy = false
                                 }
@@ -294,48 +239,7 @@ private fun NaqaaApp() {
                     ) {
                         Icon(Icons.Default.AutoFixHigh, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text(
-                            if (modelReady) "ترميم الوجه بالذكاء الاصطناعي"
-                            else if (modelDownloading) "التنزيل مستمر في الخلفية"
-                            else "تنزيل نموذج الترميم (148 MB)"
-                        )
-                    }
-                    if (modelDownloading) {
-                        Spacer(Modifier.height(12.dp))
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                        ) {
-                            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(20.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                    Spacer(Modifier.width(10.dp))
-                                    Text("تنزيل نموذج الذكاء الاصطناعي", fontWeight = FontWeight.SemiBold)
-                                }
-                                Spacer(Modifier.height(12.dp))
-                                val progress = (modelDownloadedBytes.toFloat() /
-                                    modelTotalBytes.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
-                                LinearProgressIndicator(
-                                    progress = { progress },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    "${"%.1f".format(java.util.Locale.US, modelDownloadedBytes / 1_000_000.0)} MB من " +
-                                        "${"%.1f".format(java.util.Locale.US, modelTotalBytes / 1_000_000.0)} MB  •  ${(progress * 100).toInt()}%",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    "التنزيل يعمل في الخلفية حتى عند إطفاء الشاشة أو فتح تطبيق آخر. يمكنك الرجوع لاحقًا؛ سيُستأنف من آخر جزء محفوظ إذا انقطع الاتصال.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
+                        Text(if (modelReady) "إزالة الضبابية من الصورة" else "تنزيل نموذج إزالة الضبابية (92 MB)")
                     }
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
@@ -398,7 +302,7 @@ private fun NaqaaApp() {
                     color = MaterialTheme.colorScheme.secondary,
                     textAlign = TextAlign.Center)
                 Spacer(Modifier.height(24.dp))
-                Text("نسخة تجريبية • ترميم الوجه دون إنترنت بعد تنزيل النموذج", style = MaterialTheme.typography.labelSmall,
+                Text("نسخة تجريبية • إزالة ضبابية الصورة كاملةً على الجهاز", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
