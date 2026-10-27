@@ -433,6 +433,71 @@ private const val RESTOREFORMER_PP_URL =
  * Falls back with a clear error if no face is detected instead of restoring the image center.
  */
 private object RestoreFormerRestorer {
+    private const val SIZE = 512
+
+    // FFHQ five-point template used by facexlib / RestoreFormer pipelines.
+    private val template = arrayOf(
+        floatArrayOf(192.98138f, 239.94708f), // image-left eye
+        floatArrayOf(318.90277f, 240.1936f),  // image-right eye
+        floatArrayOf(256.63416f, 314.01935f), // nose
+        floatArrayOf(201.26117f, 371.41043f), // image-left mouth corner
+        floatArrayOf(313.08905f, 371.15118f)  // image-right mouth corner
+    )
+
+    /**
+     * Least-squares affine fit from five detected source landmarks to the FFHQ template.
+     * Returns Android Matrix values mapping source-image coordinates into 512x512 model space.
+     */
+    private fun fitAffine(source: List<Pair<Float, Float>>, target: Array<FloatArray>): android.graphics.Matrix {
+        require(source.size == 5 && target.size == 5) { "Five facial landmarks are required." }
+        val normal = Array(3) { DoubleArray(3) }
+        val rhsX = DoubleArray(3)
+        val rhsY = DoubleArray(3)
+        for (i in 0 until 5) {
+            val x = source[i].first.toDouble()
+            val y = source[i].second.toDouble()
+            val row = doubleArrayOf(x, y, 1.0)
+            val tx = target[i][0].toDouble()
+            val ty = target[i][1].toDouble()
+            for (r in 0..2) {
+                rhsX[r] += row[r] * tx
+                rhsY[r] += row[r] * ty
+                for (c in 0..2) normal[r][c] += row[r] * row[c]
+            }
+        }
+
+        fun solve(matrix: Array<DoubleArray>, rhs: DoubleArray): DoubleArray {
+            val a = Array(3) { r -> DoubleArray(4) { c -> if (c < 3) matrix[r][c] else rhs[r] } }
+            for (col in 0..2) {
+                var pivot = col
+                for (r in col + 1..2) if (kotlin.math.abs(a[r][col]) > kotlin.math.abs(a[pivot][col])) pivot = r
+                if (kotlin.math.abs(a[pivot][col]) < 1e-9) {
+                    throw IllegalArgumentException("تعذرت محاذاة الوجه؛ جرّب صورة أوضح.")
+                }
+                val tmp = a[col]
+                a[col] = a[pivot]
+                a[pivot] = tmp
+                val divisor = a[col][col]
+                for (c in col..3) a[col][c] /= divisor
+                for (r in 0..2) {
+                    if (r == col) continue
+                    val factor = a[r][col]
+                    for (c in col..3) a[r][c] -= factor * a[col][c]
+                }
+            }
+            return DoubleArray(3) { a[it][3] }
+        }
+
+        val sx = solve(normal, rhsX)
+        val sy = solve(normal, rhsY)
+        val values = floatArrayOf(
+            sx[0].toFloat(), sx[1].toFloat(), sx[2].toFloat(),
+            sy[0].toFloat(), sy[1].toFloat(), sy[2].toFloat(),
+            0f, 0f, 1f
+        )
+        return android.graphics.Matrix().apply { setValues(values) }
+    }
+
     fun restore(src: Bitmap, model: File, blend: Float): Bitmap {
         val detectorOptions = com.google.mlkit.vision.face.FaceDetectorOptions.Builder()
             .setPerformanceMode(com.google.mlkit.vision.face.FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
@@ -449,50 +514,67 @@ private object RestoreFormerRestorer {
         }
         val face = faces.maxByOrNull { it.boundingBox.width().toLong() * it.boundingBox.height().toLong() }
             ?: throw IllegalArgumentException("لم يُعثر على وجه. جرّب صورة يظهر فيها الوجه بوضوح.")
-        val box = face.boundingBox
-        val faceW = box.width().coerceAtLeast(1)
-        val faceH = box.height().coerceAtLeast(1)
-        val side = (maxOf(faceW, faceH) * 1.8f).toInt().coerceAtLeast(64)
-        val cx = (box.left + box.right) / 2f
-        val cy = (box.top + box.bottom) / 2f
-        val half = side / 2f
 
-        // Build a padded square centered on the detected face; rotate to make the face upright.
-        val alignedCrop = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
-        val cropCanvas = android.graphics.Canvas(alignedCrop)
-        cropCanvas.drawColor(Color.BLACK)
-        cropCanvas.save()
-        cropCanvas.translate(half - cx, half - cy)
-        cropCanvas.rotate(-face.headEulerAngleZ, cx, cy)
-        cropCanvas.drawBitmap(src, 0f, 0f, null)
-        cropCanvas.restore()
+        fun landmark(type: Int): Pair<Float, Float> {
+            val point = face.getLandmark(type)?.position
+                ?: throw IllegalArgumentException("لم تُكتشف نقاط الوجه الخمس بوضوح. جرّب صورة أمامية بإضاءة جيدة.")
+            return Pair(point.x, point.y)
+        }
 
-        val inputBitmap = Bitmap.createScaledBitmap(alignedCrop, 512, 512, true)
-        val pixels = IntArray(512 * 512)
-        inputBitmap.getPixels(pixels, 0, 512, 0, 0, 512, 512)
-        val floats = FloatArray(3 * 512 * 512)
-        for (y in 0 until 512) {
-            for (x in 0 until 512) {
-                val p = pixels[y * 512 + x]
-                val i = y * 512 + x
+        // Sort by image x so the template order is consistent regardless of detector naming convention.
+        val eyes = listOf(
+            landmark(com.google.mlkit.vision.face.FaceLandmark.LEFT_EYE),
+            landmark(com.google.mlkit.vision.face.FaceLandmark.RIGHT_EYE)
+        ).sortedBy { it.first }
+        val mouth = listOf(
+            landmark(com.google.mlkit.vision.face.FaceLandmark.MOUTH_LEFT),
+            landmark(com.google.mlkit.vision.face.FaceLandmark.MOUTH_RIGHT)
+        ).sortedBy { it.first }
+        val points = listOf(
+            eyes[0],
+            eyes[1],
+            landmark(com.google.mlkit.vision.face.FaceLandmark.NOSE_BASE),
+            mouth[0],
+            mouth[1]
+        )
+
+        val forward = fitAffine(points, template)
+        val inverse = android.graphics.Matrix()
+        if (!forward.invert(inverse)) {
+            throw IllegalArgumentException("تعذرت محاذاة الوجه؛ جرّب صورة أخرى.")
+        }
+
+        // Warp the original image into the model's expected FFHQ five-point geometry.
+        val aligned = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
+        val alignedCanvas = android.graphics.Canvas(aligned)
+        alignedCanvas.drawColor(Color.rgb(127, 127, 127))
+        alignedCanvas.drawBitmap(src, forward, android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+
+        val pixels = IntArray(SIZE * SIZE)
+        aligned.getPixels(pixels, 0, SIZE, 0, 0, SIZE, SIZE)
+        val floats = FloatArray(3 * SIZE * SIZE)
+        for (y in 0 until SIZE) {
+            for (x in 0 until SIZE) {
+                val p = pixels[y * SIZE + x]
+                val i = y * SIZE + x
                 floats[i] = (Color.red(p) / 127.5f) - 1f
-                floats[512 * 512 + i] = (Color.green(p) / 127.5f) - 1f
-                floats[2 * 512 * 512 + i] = (Color.blue(p) / 127.5f) - 1f
+                floats[SIZE * SIZE + i] = (Color.green(p) / 127.5f) - 1f
+                floats[2 * SIZE * SIZE + i] = (Color.blue(p) / 127.5f) - 1f
             }
         }
 
-        val restoredPixels = IntArray(512 * 512)
+        val restoredPixels = IntArray(SIZE * SIZE)
         val env = OrtEnvironment.getEnvironment()
         val options = OrtSession.SessionOptions()
         options.setIntraOpNumThreads(2)
         env.createSession(model.absolutePath, options).use { session ->
-            OnnxTensor.createTensor(env, FloatBuffer.wrap(floats), longArrayOf(1, 3, 512, 512)).use { tensor ->
+            OnnxTensor.createTensor(env, FloatBuffer.wrap(floats), longArrayOf(1, 3, SIZE.toLong(), SIZE.toLong())).use { tensor ->
                 session.run(mapOf(session.inputNames.first() to tensor)).use { result ->
                     @Suppress("UNCHECKED_CAST")
                     val output = result[0].value as Array<Array<Array<FloatArray>>>
-                    for (y in 0 until 512) {
-                        for (x in 0 until 512) {
-                            val i = y * 512 + x
+                    for (y in 0 until SIZE) {
+                        for (x in 0 until SIZE) {
+                            val i = y * SIZE + x
                             val r = ((output[0][0][y][x] + 1f) * 127.5f).toInt().coerceIn(0, 255)
                             val g = ((output[0][1][y][x] + 1f) * 127.5f).toInt().coerceIn(0, 255)
                             val b = ((output[0][2][y][x] + 1f) * 127.5f).toInt().coerceIn(0, 255)
@@ -503,36 +585,41 @@ private object RestoreFormerRestorer {
             }
         }
 
-        val restored512 = Bitmap.createBitmap(restoredPixels, 512, 512, Bitmap.Config.ARGB_8888)
-        val restoredCrop = Bitmap.createScaledBitmap(restored512, side, side, true)
-        val outputBitmap = src.copy(Bitmap.Config.ARGB_8888, true)
+        val restoredAligned = Bitmap.createBitmap(restoredPixels, SIZE, SIZE, Bitmap.Config.ARGB_8888)
 
-        // Rotate the restored crop back into the original image coordinates.
+        // Inverse-warp the restored face back to the exact original-image coordinate system.
         val overlay = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
         val overlayCanvas = android.graphics.Canvas(overlay)
-        overlayCanvas.save()
-        overlayCanvas.rotate(face.headEulerAngleZ, cx, cy)
-        overlayCanvas.drawBitmap(restoredCrop, cx - half, cy - half, null)
-        overlayCanvas.restore()
+        overlayCanvas.drawBitmap(
+            restoredAligned,
+            inverse,
+            android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+        )
 
-        // Blend only around the detected face, with a soft elliptical boundary.
-        val left = (cx - side).toInt().coerceAtLeast(0)
-        val top = (cy - side).toInt().coerceAtLeast(0)
-        val right = (cx + side).toInt().coerceAtMost(src.width)
-        val bottom = (cy + side).toInt().coerceAtMost(src.height)
+        val outputBitmap = src.copy(Bitmap.Config.ARGB_8888, true)
+        val box = face.boundingBox
+        val left = (box.left - box.width() * 0.35f).toInt().coerceAtLeast(0)
+        val top = (box.top - box.height() * 0.35f).toInt().coerceAtLeast(0)
+        val right = (box.right + box.width() * 0.35f).toInt().coerceAtMost(src.width)
+        val bottom = (box.bottom + box.height() * 0.45f).toInt().coerceAtMost(src.height)
         val width = right - left
         val height = bottom - top
+        if (width <= 0 || height <= 0) return outputBitmap
+
         val originalRegion = IntArray(width * height)
         val overlayRegion = IntArray(width * height)
         outputBitmap.getPixels(originalRegion, 0, width, left, top, width, height)
         overlay.getPixels(overlayRegion, 0, width, left, top, width, height)
         val amount = blend.coerceIn(0f, 1f)
-        val rx = (faceW * 0.95f).coerceAtLeast(1f)
-        val ry = (faceH * 0.95f).coerceAtLeast(1f)
+        val cx = (box.left + box.right) / 2f
+        val cy = (box.top + box.bottom) / 2f
+        val rx = (box.width() * 0.78f).coerceAtLeast(1f)
+        val ry = (box.height() * 0.90f).coerceAtLeast(1f)
         for (y in 0 until height) {
             for (x in 0 until width) {
                 val i = y * width + x
                 val p = overlayRegion[i]
+                if (Color.alpha(p) == 0) continue
                 val px = left + x + 0.5f
                 val py = top + y + 0.5f
                 val dx = (px - cx) / rx
@@ -548,12 +635,12 @@ private object RestoreFormerRestorer {
                 }
                 val alpha = amount * mask * (Color.alpha(p) / 255f)
                 if (alpha <= 0f) continue
-                val a = originalRegion[i]
-                fun mix(c1: Int, c2: Int) = (c1 + (c2 - c1) * alpha).toInt().coerceIn(0, 255)
+                val original = originalRegion[i]
+                fun mix(a: Int, b: Int) = (a + (b - a) * alpha).toInt().coerceIn(0, 255)
                 originalRegion[i] = Color.rgb(
-                    mix(Color.red(a), Color.red(p)),
-                    mix(Color.green(a), Color.green(p)),
-                    mix(Color.blue(a), Color.blue(p))
+                    mix(Color.red(original), Color.red(p)),
+                    mix(Color.green(original), Color.green(p)),
+                    mix(Color.blue(original), Color.blue(p))
                 )
             }
         }
