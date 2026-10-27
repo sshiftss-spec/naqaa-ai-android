@@ -64,6 +64,9 @@ private fun NaqaaApp() {
     var enhanced by remember { mutableStateOf<Bitmap?>(null) }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("اختر صورة للبدء") }
+    var downloadProgress by remember { mutableFloatStateOf(0f) }
+    var downloadBytes by remember { mutableLongStateOf(0L) }
+    var downloadTotal by remember { mutableLongStateOf(-1L) }
     val modelFile = remember { File(context.filesDir, "nafnet_deblur.onnx") }
     var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 80_000_000L) }
 
@@ -219,10 +222,20 @@ private fun NaqaaApp() {
                             scope.launch {
                                 busy = true
                                 try {
-                                    status = if (modelReady) "جارٍ إزالة الضبابية من كامل الصورة..." else "جارٍ تنزيل نموذج NAFNet (نحو 92 MB)..."
+                                    status = if (modelReady) "جارٍ إزالة الضبابية من كامل الصورة..." else "جارٍ تنزيل نموذج NAFNet في الخلفية..."
+                                    downloadProgress = 0f
+                                    downloadBytes = 0L
+                                    downloadTotal = -1L
                                     val readyModel = withContext(Dispatchers.IO) {
-                                        NafNetDeblurRestorer.ensureModel(context.filesDir)
+                                        NafNetDeblurRestorer.ensureModel(context.filesDir) { downloaded, total ->
+                                            scope.launch {
+                                                downloadBytes = downloaded
+                                                downloadTotal = total
+                                                if (total > 0L) downloadProgress = (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+                                            }
+                                        }
                                     }
+                                    downloadProgress = 1f
                                     modelReady = true
                                     status = "جارٍ معالجة الصورة كاملةً..."
                                     enhanced = withContext(Dispatchers.Default) {
@@ -297,7 +310,22 @@ private fun NaqaaApp() {
                     }
                 }
                 Spacer(Modifier.height(14.dp))
-                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (busy && !modelReady && original != null) {
+                    LinearProgressIndicator(
+                        progress = { downloadProgress },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    val progressLabel = if (downloadTotal > 0L) {
+                        val downloadedMb = downloadBytes / (1024L * 1024L)
+                        val totalMb = downloadTotal / (1024L * 1024L)
+                        "تنزيل النموذج: " + downloadedMb + " / " + totalMb + " MB — " + (downloadProgress * 100).toInt() + "%"
+                    } else {
+                        "جارٍ تنزيل النموذج في الخلفية..."
+                    }
+                    Text(progressLabel, modifier = Modifier.padding(top = 6.dp), textAlign = TextAlign.Center)
+                } else if (busy) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
                 Text(status, modifier = Modifier.padding(top = 8.dp),
                     color = MaterialTheme.colorScheme.secondary,
                     textAlign = TextAlign.Center)
