@@ -22,8 +22,8 @@ class ModelDownloadService : Service() {
         private const val CHANNEL_ID = "naqaa_model_downloads"
         private const val NOTIFICATION_ID = 4101
         private const val MODEL_URL =
-            "https://huggingface.co/ykk648/face_lib/resolve/main/face_restore/gfpgan/GFPGANv1.4.onnx"
-        private const val EXPECTED_SIZE = 340_000_000L
+            "https://huggingface.co/Saimon8420/restoreformer-pp-web/resolve/main/restoreformer_pp_fp16w.onnx"
+        private const val EXPECTED_SIZE = 148_000_000L
     }
 
     private val executor = Executors.newSingleThreadExecutor()
@@ -50,10 +50,10 @@ class ModelDownloadService : Service() {
 
     private fun downloadModel() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        val destination = File(filesDir, "gfpgan_v14.onnx")
-        val partial = File(filesDir, "gfpgan_v14.onnx.download")
+        val destination = File(filesDir, "restoreformer_pp.onnx")
+        val partial = File(filesDir, "restoreformer_pp.onnx.download")
         try {
-            if (destination.exists() && destination.length() > 300_000_000L) {
+            if (destination.exists() && destination.length() > 100_000_000L) {
                 saveState("completed", destination.length(), destination.length(), null)
                 updateNotification("النموذج جاهز للاستخدام دون إنترنت", 100, false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -113,7 +113,7 @@ class ModelDownloadService : Service() {
                         output.fd.sync()
                     }
                 }
-                if (partial.length() < 300_000_000L) {
+                if (partial.length() < 100_000_000L) {
                     throw IllegalStateException(
                         "اكتمل الاتصال لكن حجم الملف ${formatMb(partial.length())} MB فقط. أعد المحاولة مع اتصال ثابت."
                     )
@@ -123,7 +123,7 @@ class ModelDownloadService : Service() {
                     throw IllegalStateException("تعذر نقل النموذج إلى مجلد التطبيق")
                 }
                 saveState("completed", destination.length(), totalBytes, null)
-                updateNotification("اكتمل تنزيل نموذج نقاء AI", 100, false)
+                updateNotification("اكتمل تنزيل نموذج RestoreFormer++", 100, false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             } finally {
@@ -154,7 +154,7 @@ class ModelDownloadService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "تنزيل نموذج نقاء AI",
+                "تنزيل نموذج RestoreFormer++",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "إظهار تقدم تنزيل نموذج ترميم الوجوه"
