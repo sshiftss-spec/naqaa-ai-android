@@ -93,7 +93,7 @@ internal object NafNetDeblurRestorer {
                             @Suppress("UNCHECKED_CAST")
                             val values = result[0].value as? Array<Array<Array<FloatArray>>>
                                 ?: throw IllegalStateException("صيغة خرج النموذج غير متوقعة")
-                            if (values[0].size < TILE || values[0][0].size < TILE) {
+                            if (values[0].size < 3 || values[0][0].size < TILE || values[0][0][0].size < TILE) {
                                 throw IllegalStateException("أبعاد خرج النموذج غير متوافقة")
                             }
 
