@@ -132,6 +132,6 @@ internal object NafNetDeblurRestorer {
         }
         val last = size - TILE
         if (starts.isEmpty() || starts.last() != last) starts.add(last)
-        return starts.distinct()
+        return starts.distinct().sorted()
     }
 }
