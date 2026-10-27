@@ -646,7 +646,8 @@ private object RestoreFormerRestorer {
             android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
         )
 
-        // Keep the whole frame gently enhanced; the AI restoration is blended over the face region.\n        val outputBitmap = enhanceWholeImage(src)
+        // Keep the whole frame gently enhanced; the AI restoration is blended over the face region.
+        val outputBitmap = enhanceWholeImage(src)
         val box = face.boundingBox
         val left = (box.left - box.width() * 0.35f).toInt().coerceAtLeast(0)
         val top = (box.top - box.height() * 0.35f).toInt().coerceAtLeast(0)
