@@ -22,8 +22,8 @@ class ModelDownloadService : Service() {
         private const val CHANNEL_ID = "naqaa_model_downloads"
         private const val NOTIFICATION_ID = 4101
         private const val MODEL_URL =
-            "https://huggingface.co/Saimon8420/restoreformer-pp-web/resolve/main/restoreformer_pp_fp16w.onnx"
-        private const val EXPECTED_SIZE = 148_000_000L
+            "https://huggingface.co/opencv/deblurring_nafnet/resolve/main/deblurring_nafnet_2025may.onnx?download=true"
+        private const val EXPECTED_SIZE = 92_000_000L
     }
 
     private val executor = Executors.newSingleThreadExecutor()
@@ -50,10 +50,10 @@ class ModelDownloadService : Service() {
 
     private fun downloadModel() {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        val destination = File(filesDir, "restoreformer_pp.onnx")
-        val partial = File(filesDir, "restoreformer_pp.onnx.download")
+        val destination = File(filesDir, "nafnet_deblur.onnx")
+        val partial = File(filesDir, "nafnet_deblur.onnx.download")
         try {
-            if (destination.exists() && destination.length() > 100_000_000L) {
+            if (destination.exists() && destination.length() > 80_000_000L) {
                 saveState("completed", destination.length(), destination.length(), null)
                 updateNotification("النموذج جاهز للاستخدام دون إنترنت", 100, false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -113,7 +113,7 @@ class ModelDownloadService : Service() {
                         output.fd.sync()
                     }
                 }
-                if (partial.length() < 100_000_000L) {
+                if (partial.length() < 80_000_000L) {
                     throw IllegalStateException(
                         "اكتمل الاتصال لكن حجم الملف ${formatMb(partial.length())} MB فقط. أعد المحاولة مع اتصال ثابت."
                     )
@@ -123,7 +123,7 @@ class ModelDownloadService : Service() {
                     throw IllegalStateException("تعذر نقل النموذج إلى مجلد التطبيق")
                 }
                 saveState("completed", destination.length(), totalBytes, null)
-                updateNotification("اكتمل تنزيل نموذج RestoreFormer++", 100, false)
+                updateNotification("اكتمل تنزيل نموذج NAFNet", 100, false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             } finally {
@@ -131,7 +131,7 @@ class ModelDownloadService : Service() {
             }
         } catch (e: Exception) {
             saveState("error", partial.length(), EXPECTED_SIZE, e.message ?: "خطأ غير معروف")
-            updateNotification("تعذر تنزيل النموذج. افتح نقاء AI للمحاولة مجددًا.", 0, false)
+            updateNotification("تعذر تنزيل نموذج NAFNet. افتح نقاء AI للمحاولة مجددًا.", 0, false)
             stopForeground(STOP_FOREGROUND_DETACH)
             stopSelf()
         } finally {
@@ -154,10 +154,10 @@ class ModelDownloadService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "تنزيل نموذج RestoreFormer++",
+                "تنزيل نموذج NAFNet",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "إظهار تقدم تنزيل نموذج ترميم الوجوه"
+                description = "إظهار تقدم تنزيل نموذج إزالة الضبابية"
                 setShowBadge(false)
             }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
