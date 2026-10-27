@@ -13,18 +13,21 @@ import ai.onnxruntime.OrtSession
 
 /**
  * Experimental full-frame NAFNet deblurring.
- * The model is applied to overlapping 256px tiles so large photos do not require one huge tensor.
+ * 512px overlapping tiles avoid zero-sized intermediate tensors in the encoder.
  */
 internal object NafNetDeblurRestorer {
     private const val MODEL_URL =
         "https://huggingface.co/opencv/deblurring_nafnet/resolve/main/deblurring_nafnet_2025may.onnx?download=true"
     private const val MIN_MODEL_BYTES = 80_000_000L
-    private const val TILE = 256
-    private const val STEP = 224
+    private const val TILE = 512
+    private const val STEP = 448
 
-    fun ensureModel(filesDir: File): File {
+    fun ensureModel(filesDir: File, onProgress: (downloaded: Long, total: Long) -> Unit = { _, _ -> }): File {
         val destination = File(filesDir, "nafnet_deblur.onnx")
-        if (destination.isFile && destination.length() >= MIN_MODEL_BYTES) return destination
+        if (destination.isFile && destination.length() >= MIN_MODEL_BYTES) {
+            onProgress(destination.length(), destination.length())
+            return destination
+        }
 
         val partial = File(filesDir, "nafnet_deblur.onnx.download")
         val connection = (URL(MODEL_URL).openConnection() as HttpURLConnection).apply {
@@ -38,8 +41,23 @@ internal object NafNetDeblurRestorer {
             if (code != HttpURLConnection.HTTP_OK) {
                 throw IllegalStateException("تعذر تنزيل النموذج (HTTP $code)")
             }
+            val total = connection.contentLengthLong
+            var downloaded = 0L
+            var lastReported = 0L
             connection.inputStream.use { input ->
-                FileOutputStream(partial).use { output -> input.copyTo(output, 1024 * 1024) }
+                FileOutputStream(partial).use { output ->
+                    val buffer = ByteArray(256 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                        downloaded += count
+                        if (downloaded - lastReported >= 512 * 1024 || (total > 0 && downloaded >= total)) {
+                            onProgress(downloaded, total)
+                            lastReported = downloaded
+                        }
+                    }
+                }
             }
             if (partial.length() < MIN_MODEL_BYTES) {
                 throw IllegalStateException("ملف النموذج غير مكتمل؛ أعد المحاولة باتصال ثابت")
@@ -48,6 +66,7 @@ internal object NafNetDeblurRestorer {
             if (!partial.renameTo(destination)) {
                 throw IllegalStateException("تعذر حفظ ملف النموذج على الجهاز")
             }
+            onProgress(destination.length(), if (total > 0) total else destination.length())
             return destination
         } finally {
             connection.disconnect()
@@ -97,17 +116,16 @@ internal object NafNetDeblurRestorer {
                                 throw IllegalStateException("أبعاد خرج النموذج غير متوافقة")
                             }
 
-                            val localLeft = if (left == 0) 0 else 16
-                            val localTop = if (top == 0) 0 else 16
-                            val localRight = if (left + TILE >= width) TILE else TILE - 16
-                            val localBottom = if (top + TILE >= height) TILE else TILE - 16
+                            val localLeft = if (left == 0) 0 else 32
+                            val localTop = if (top == 0) 0 else 32
+                            val localRight = if (left + TILE >= width) TILE else TILE - 32
+                            val localBottom = if (top + TILE >= height) TILE else TILE - 32
                             for (y in localTop until localBottom) {
                                 val gy = top + y
                                 if (gy !in 0 until height) continue
                                 for (x in localLeft until localRight) {
                                     val gx = left + x
                                     if (gx !in 0 until width) continue
-                                    val i = y * TILE + x
                                     val r = (values[0][0][y][x] * 255f).toInt().coerceIn(0, 255)
                                     val g = (values[0][1][y][x] * 255f).toInt().coerceIn(0, 255)
                                     val b = (values[0][2][y][x] * 255f).toInt().coerceIn(0, 255)
