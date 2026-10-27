@@ -435,6 +435,56 @@ private const val RESTOREFORMER_PP_URL =
 private object RestoreFormerRestorer {
     private const val SIZE = 512
 
+    /**
+     * Gentle whole-frame pass: subtle local sharpening and contrast adjustment.
+     * This is intentionally conservative; it improves the entire photo but does not invent
+     * missing body/clothing/background details like a dedicated general-purpose AI model could.
+     * Rows are processed incrementally to avoid allocating several full-resolution pixel arrays.
+     */
+    private fun enhanceWholeImage(src: Bitmap): Bitmap {
+        val w = src.width
+        val h = src.height
+        val result = src.copy(Bitmap.Config.ARGB_8888, true)
+        val previous = IntArray(w)
+        val current = IntArray(w)
+        val next = IntArray(w)
+        val output = IntArray(w)
+
+        for (y in 0 until h) {
+            val y0 = (y - 1).coerceAtLeast(0)
+            val y1 = (y + 1).coerceAtMost(h - 1)
+            src.getPixels(previous, 0, w, 0, y0, w, 1)
+            src.getPixels(current, 0, w, 0, y, w, 1)
+            src.getPixels(next, 0, w, 0, y1, w, 1)
+            for (x in 0 until w) {
+                val p = current[x]
+                val left = current[(x - 1).coerceAtLeast(0)]
+                val right = current[(x + 1).coerceAtMost(w - 1)]
+                val up = previous[x]
+                val down = next[x]
+
+                fun improve(channel: (Int) -> Int): Int {
+                    val center = channel(p).toFloat()
+                    val neighborhood = (
+                        channel(left) + channel(right) + channel(up) + channel(down)
+                    ) / 4f
+                    val sharpened = center + 0.14f * (center - neighborhood)
+                    val contrasted = (sharpened - 127.5f) * 1.025f + 127.5f
+                    return contrasted.toInt().coerceIn(0, 255)
+                }
+
+                output[x] = Color.argb(
+                    Color.alpha(p),
+                    improve(Color::red),
+                    improve(Color::green),
+                    improve(Color::blue)
+                )
+            }
+            result.setPixels(output, 0, w, 0, y, w, 1)
+        }
+        return result
+    }
+
     // FFHQ five-point template used by facexlib / RestoreFormer pipelines.
     private val template = arrayOf(
         floatArrayOf(192.98138f, 239.94708f), // image-left eye
@@ -596,7 +646,7 @@ private object RestoreFormerRestorer {
             android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
         )
 
-        val outputBitmap = src.copy(Bitmap.Config.ARGB_8888, true)
+        // Keep the whole frame gently enhanced; the AI restoration is blended over the face region.\n        val outputBitmap = enhanceWholeImage(src)
         val box = face.boundingBox
         val left = (box.left - box.width() * 0.35f).toInt().coerceAtLeast(0)
         val top = (box.top - box.height() * 0.35f).toInt().coerceAtLeast(0)
