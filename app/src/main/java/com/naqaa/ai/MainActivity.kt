@@ -73,24 +73,24 @@ private fun NaqaaApp() {
     }
     var modelTotalBytes by remember {
         mutableStateOf(context.getSharedPreferences(ModelDownloadService.PREFS, 0)
-            .getLong("total", 340_000_000L))
+            .getLong("total", 148_000_000L))
     }
     var status by remember { mutableStateOf("اختر صورة للبدء") }
     var strength by remember { mutableFloatStateOf(0.25f) }
     val modelFile = remember { File(context.filesDir, "restoreformer_pp.onnx") }
-    var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 300_000_000L) }
+    var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 100_000_000L) }
 
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
         while (true) {
             val downloadState = prefs.getString("state", "idle") ?: "idle"
             modelDownloadedBytes = prefs.getLong("downloaded", 0L)
-            modelTotalBytes = prefs.getLong("total", 340_000_000L).coerceAtLeast(1L)
+            modelTotalBytes = prefs.getLong("total", 148_000_000L).coerceAtLeast(1L)
             modelDownloading = downloadState == "downloading"
             when (downloadState) {
                 "downloading" -> status = "جارٍ تنزيل نموذج RestoreFormer++ في الخلفية..."
                 "completed" -> {
-                    if (modelFile.exists() && modelFile.length() > 300_000_000L) {
+                    if (modelFile.exists() && modelFile.length() > 100_000_000L) {
                         modelReady = true
                         status = "اكتمل تنزيل النموذج. أصبح جاهزًا للعمل دون إنترنت."
                     }
@@ -98,7 +98,7 @@ private fun NaqaaApp() {
                 "error" -> status = "تعذّر تنزيل النموذج: " +
                     (prefs.getString("error", "خطأ غير معروف") ?: "خطأ غير معروف")
             }
-            if (modelFile.exists() && modelFile.length() > 300_000_000L) modelReady = true
+            if (modelFile.exists() && modelFile.length() > 100_000_000L) modelReady = true
             delay(750)
         }
     }
