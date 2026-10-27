@@ -70,6 +70,28 @@ private fun NaqaaApp() {
     val modelFile = remember { File(context.filesDir, "nafnet_deblur.onnx") }
     var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 80_000_000L) }
 
+    // Observe the foreground download service even after returning to the app.
+    LaunchedEffect(Unit) {
+        val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
+        while (true) {
+            val state = prefs.getString("state", "idle") ?: "idle"
+            downloadBytes = prefs.getLong("downloaded", 0L)
+            downloadTotal = prefs.getLong("total", -1L)
+            if (downloadTotal > 0L) {
+                downloadProgress = (downloadBytes.toFloat() / downloadTotal.toFloat()).coerceIn(0f, 1f)
+            }
+            if (modelFile.exists() && modelFile.length() > 80_000_000L) modelReady = true
+            if (state == "downloading" && !modelReady) {
+                status = "جارٍ تنزيل نموذج NAFNet في الخلفية..."
+            } else if (state == "error" && !modelReady) {
+                status = "تعذّر تنزيل النموذج: " + (prefs.getString("error", "خطأ غير معروف") ?: "خطأ غير معروف")
+            } else if (state == "completed" && modelReady && status.contains("تنزيل")) {
+                status = "اكتمل تنزيل النموذج، وهو جاهز للعمل دون إنترنت."
+            }
+            kotlinx.coroutines.delay(750)
+        }
+    }
+
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
@@ -226,17 +248,32 @@ private fun NaqaaApp() {
                                     downloadProgress = 0f
                                     downloadBytes = 0L
                                     downloadTotal = -1L
-                                    val readyModel = withContext(Dispatchers.IO) {
-                                        NafNetDeblurRestorer.ensureModel(context.filesDir) { downloaded, total ->
-                                            scope.launch {
-                                                downloadBytes = downloaded
-                                                downloadTotal = total
-                                                if (total > 0L) downloadProgress = (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+                                    if (!modelReady) {
+                                        val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
+                                        if (prefs.getString("state", "idle") != "downloading") {
+                                            status = "بدء تنزيل نموذج NAFNet في الخلفية..."
+                                            val intent = Intent(context, ModelDownloadService::class.java)
+                                                .setAction(ModelDownloadService.ACTION_START)
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                                context.startForegroundService(intent)
+                                            } else {
+                                                context.startService(intent)
+                                            }
+                                        }
+                                        while (!modelReady) {
+                                            kotlinx.coroutines.delay(500)
+                                            val state = prefs.getString("state", "idle")
+                                            if (modelFile.exists() && modelFile.length() > 80_000_000L) {
+                                                modelReady = true
+                                                break
+                                            }
+                                            if (state == "error") {
+                                                throw IllegalStateException(prefs.getString("error", "تعذّر تنزيل النموذج"))
                                             }
                                         }
                                     }
                                     downloadProgress = 1f
-                                    modelReady = true
+                                    val readyModel = modelFile
                                     status = "جارٍ معالجة الصورة كاملةً..."
                                     enhanced = withContext(Dispatchers.Default) {
                                         NafNetDeblurRestorer.restore(source, readyModel)
