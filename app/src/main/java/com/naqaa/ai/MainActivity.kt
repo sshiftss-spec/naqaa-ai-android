@@ -77,6 +77,7 @@ private fun NaqaaApp() {
     }
     var status by remember { mutableStateOf("اختر صورة للبدء") }
     var strength by remember { mutableFloatStateOf(0.25f) }
+    var wholeImageSharpness by remember { mutableFloatStateOf(0.55f) }
     val modelFile = remember { File(context.filesDir, "restoreformer_pp.onnx") }
     var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 100_000_000L) }
 
@@ -242,7 +243,20 @@ private fun NaqaaApp() {
                             modifier = Modifier.padding(top = 8.dp))
                     }
                     Spacer(Modifier.height(18.dp))
-                    Text("قوة دمج الترميم: ${(strength * 100).toInt()}%",
+                    Text("تحسين وضوح كامل الصورة: ${(wholeImageSharpness * 100).toInt()}%",
+                        modifier = Modifier.align(Alignment.Start))
+                    Slider(
+                        value = wholeImageSharpness,
+                        onValueChange = { wholeImageSharpness = it },
+                        valueRange = 0f..1f
+                    )
+                    Text(
+                        "يؤثر على الشعر والجسم والملابس والخلفية، وليس الوجه فقط.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text("قوة دمج ترميم الوجه: ${(strength * 100).toInt()}%",
                         modifier = Modifier.align(Alignment.Start))
                     Slider(value = strength, onValueChange = { strength = it })
                     Button(
@@ -266,7 +280,7 @@ private fun NaqaaApp() {
                                     } else {
                                         status = "جارٍ ترميم الوجه على الهاتف..."
                                         enhanced = withContext(Dispatchers.Default) {
-                                            RestoreFormerRestorer.restore(source, modelFile, strength)
+                                            RestoreFormerRestorer.restore(source, modelFile, strength, wholeImageSharpness)
                                         }
                                         status = "اكتمل ترميم الوجه محليًا دون رفع الصورة"
                                     }
@@ -442,7 +456,7 @@ private object RestoreFormerRestorer {
      * or recover details that were lost; a general-purpose trained deblurring model would be needed.
      * Rows are processed incrementally to avoid allocating several full-resolution pixel arrays.
      */
-    private fun enhanceWholeImage(src: Bitmap): Bitmap {
+    private fun enhanceWholeImage(src: Bitmap, strength: Float): Bitmap {
         val w = src.width
         val h = src.height
         val result = src.copy(Bitmap.Config.ARGB_8888, true)
@@ -469,7 +483,7 @@ private object RestoreFormerRestorer {
                     val neighborhood = (
                         channel(left) + channel(right) + channel(up) + channel(down)
                     ) / 4f
-                    val sharpened = center + 0.55f * (center - neighborhood)
+                    val sharpened = center + strength.coerceIn(0f, 1f) * (center - neighborhood)
                     val contrasted = (sharpened - 127.5f) * 1.025f + 127.5f
                     return contrasted.toInt().coerceIn(0, 255)
                 }
@@ -549,7 +563,7 @@ private object RestoreFormerRestorer {
         return android.graphics.Matrix().apply { setValues(values) }
     }
 
-    fun restore(src: Bitmap, model: File, blend: Float): Bitmap {
+    fun restore(src: Bitmap, model: File, blend: Float, wholeImageSharpness: Float): Bitmap {
         val detectorOptions = com.google.mlkit.vision.face.FaceDetectorOptions.Builder()
             .setPerformanceMode(com.google.mlkit.vision.face.FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
             .setLandmarkMode(com.google.mlkit.vision.face.FaceDetectorOptions.LANDMARK_MODE_ALL)
@@ -648,7 +662,7 @@ private object RestoreFormerRestorer {
         )
 
         // Keep the whole frame gently enhanced; the AI restoration is blended over the face region.
-        val outputBitmap = enhanceWholeImage(src)
+        val outputBitmap = enhanceWholeImage(src, wholeImageSharpness)
         val box = face.boundingBox
         val left = (box.left - box.width() * 0.35f).toInt().coerceAtLeast(0)
         val top = (box.top - box.height() * 0.35f).toInt().coerceAtLeast(0)
