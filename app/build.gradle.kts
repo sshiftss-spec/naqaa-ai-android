@@ -14,11 +14,11 @@ android {
         jvmTarget = "17"
     }
     defaultConfig {
-        applicationId = "com.naqaa.ai"
+        applicationId = "com.naqaa.ai.preview"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0-preview"
     }
     buildFeatures { compose = true }
 }
@@ -31,5 +31,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
+    implementation("com.google.mlkit:face-detection:16.1.7")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -3,6 +3,7 @@ package com.naqaa.ai
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import kotlin.math.max
 import android.net.Uri
 import android.content.Intent
 import android.content.ContentValues
@@ -72,24 +73,25 @@ private fun NaqaaApp() {
     }
     var modelTotalBytes by remember {
         mutableStateOf(context.getSharedPreferences(ModelDownloadService.PREFS, 0)
-            .getLong("total", 340_000_000L))
+            .getLong("total", 148_000_000L))
     }
     var status by remember { mutableStateOf("اختر صورة للبدء") }
-    var strength by remember { mutableFloatStateOf(0.8f) }
-    val modelFile = remember { File(context.filesDir, "gfpgan_v14.onnx") }
-    var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 300_000_000L) }
+    var strength by remember { mutableFloatStateOf(0.25f) }
+    var wholeImageSharpness by remember { mutableFloatStateOf(0.55f) }
+    val modelFile = remember { File(context.filesDir, "restoreformer_pp.onnx") }
+    var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 100_000_000L) }
 
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
         while (true) {
             val downloadState = prefs.getString("state", "idle") ?: "idle"
             modelDownloadedBytes = prefs.getLong("downloaded", 0L)
-            modelTotalBytes = prefs.getLong("total", 340_000_000L).coerceAtLeast(1L)
+            modelTotalBytes = prefs.getLong("total", 148_000_000L).coerceAtLeast(1L)
             modelDownloading = downloadState == "downloading"
             when (downloadState) {
-                "downloading" -> status = "جارٍ تنزيل نموذج GFPGAN في الخلفية..."
+                "downloading" -> status = "جارٍ تنزيل نموذج RestoreFormer++ في الخلفية..."
                 "completed" -> {
-                    if (modelFile.exists() && modelFile.length() > 300_000_000L) {
+                    if (modelFile.exists() && modelFile.length() > 100_000_000L) {
                         modelReady = true
                         status = "اكتمل تنزيل النموذج. أصبح جاهزًا للعمل دون إنترنت."
                     }
@@ -97,7 +99,7 @@ private fun NaqaaApp() {
                 "error" -> status = "تعذّر تنزيل النموذج: " +
                     (prefs.getString("error", "خطأ غير معروف") ?: "خطأ غير معروف")
             }
-            if (modelFile.exists() && modelFile.length() > 300_000_000L) modelReady = true
+            if (modelFile.exists() && modelFile.length() > 100_000_000L) modelReady = true
             delay(750)
         }
     }
@@ -235,13 +237,26 @@ private fun NaqaaApp() {
                                 }
                             }
                         }
-                        Text("ترميم GFPGAN يعيد بناء تفاصيل الوجه تقديريًا. للحصول على أفضل نتيجة استخدم صورة وجه قريبة ومتمركزة.",
+                        Text("يكتشف التطبيق أكبر وجه في الصورة ويحاول تصحيح ميله قبل الترميم. قد تتغير بعض الملامح لأن نموذج الترميم يعيد بناء التفاصيل تقديريًا.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.secondary,
                             modifier = Modifier.padding(top = 8.dp))
                     }
                     Spacer(Modifier.height(18.dp))
-                    Text("قوة دمج الترميم: ${(strength * 100).toInt()}%",
+                    Text("تحسين وضوح كامل الصورة: ${(wholeImageSharpness * 100).toInt()}%",
+                        modifier = Modifier.align(Alignment.Start))
+                    Slider(
+                        value = wholeImageSharpness,
+                        onValueChange = { wholeImageSharpness = it },
+                        valueRange = 0f..1f
+                    )
+                    Text(
+                        "يؤثر على الشعر والجسم والملابس والخلفية، وليس الوجه فقط.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text("قوة دمج ترميم الوجه: ${(strength * 100).toInt()}%",
                         modifier = Modifier.align(Alignment.Start))
                     Slider(value = strength, onValueChange = { strength = it })
                     Button(
@@ -265,7 +280,7 @@ private fun NaqaaApp() {
                                     } else {
                                         status = "جارٍ ترميم الوجه على الهاتف..."
                                         enhanced = withContext(Dispatchers.Default) {
-                                            GfpganRestorer.restore(source, modelFile, strength)
+                                            RestoreFormerRestorer.restore(source, modelFile, strength, wholeImageSharpness)
                                         }
                                         status = "اكتمل ترميم الوجه محليًا دون رفع الصورة"
                                     }
@@ -282,7 +297,7 @@ private fun NaqaaApp() {
                         Text(
                             if (modelReady) "ترميم الوجه بالذكاء الاصطناعي"
                             else if (modelDownloading) "التنزيل مستمر في الخلفية"
-                            else "تنزيل نموذج الترميم (340 MB)"
+                            else "تنزيل نموذج الترميم (148 MB)"
                         )
                     }
                     if (modelDownloading) {
@@ -423,75 +438,279 @@ private fun saveBitmapToGallery(context: android.content.Context, bitmap: Bitmap
     }
 }
 
-private const val GFP_GAN_URL =
-    "https://huggingface.co/ykk648/face_lib/resolve/main/face_restore/gfpgan/GFPGANv1.4.onnx"
+private const val RESTOREFORMER_PP_URL =
+    "https://huggingface.co/Saimon8420/restoreformer-pp-web/resolve/main/restoreformer_pp_fp16w.onnx"
 
 /**
- * GFPGAN v1.4 ONNX inference. The model expects a 512x512 face-like crop
- * normalized to [-1,1]. This MVP uses a centered square crop, so a close-up,
- * centered face gives the best result; it is not a full face-detection/alignment pipeline.
+ * Experimental RestoreFormer++ inference using the model’s RGB [-1, 1] ONNX interface.
+ * Face crop/placement remains approximate in this preview build; quality must be tested on-device.
+ * Falls back with a clear error if no face is detected instead of restoring the image center.
  */
-private object GfpganRestorer {
-    fun restore(src: Bitmap, model: File, blend: Float): Bitmap {
-        val size = minOf(src.width, src.height)
-        require(size >= 64) { "الصورة صغيرة جدًا للترميم" }
-        val left = (src.width - size) / 2
-        val top = (src.height - size) / 2
-        val crop = Bitmap.createBitmap(src, left, top, size, size)
-        val inputBitmap = Bitmap.createScaledBitmap(crop, 512, 512, true)
-        val pixels = IntArray(512 * 512)
-        inputBitmap.getPixels(pixels, 0, 512, 0, 0, 512, 512)
-        val floats = FloatArray(3 * 512 * 512)
-        for (y in 0 until 512) {
-            for (x in 0 until 512) {
-                val p = pixels[y * 512 + x]
-                val i = y * 512 + x
-                floats[i] = (Color.red(p) / 127.5f) - 1f
-                floats[512 * 512 + i] = (Color.green(p) / 127.5f) - 1f
-                floats[2 * 512 * 512 + i] = (Color.blue(p) / 127.5f) - 1f
+private object RestoreFormerRestorer {
+    private const val SIZE = 512
+
+    /**
+     * Whole-frame local deblurring approximation using an unsharp mask and mild contrast.
+     * This runs on every pixel before face restoration, so body, clothing, hair, and background
+     * are also affected. It can reduce mild blur but cannot perfectly invert a strong Gaussian blur
+     * or recover details that were lost; a general-purpose trained deblurring model would be needed.
+     * Rows are processed incrementally to avoid allocating several full-resolution pixel arrays.
+     */
+    private fun enhanceWholeImage(src: Bitmap, strength: Float): Bitmap {
+        val w = src.width
+        val h = src.height
+        val result = src.copy(Bitmap.Config.ARGB_8888, true)
+        val previous = IntArray(w)
+        val current = IntArray(w)
+        val next = IntArray(w)
+        val output = IntArray(w)
+
+        for (y in 0 until h) {
+            val y0 = (y - 1).coerceAtLeast(0)
+            val y1 = (y + 1).coerceAtMost(h - 1)
+            src.getPixels(previous, 0, w, 0, y0, w, 1)
+            src.getPixels(current, 0, w, 0, y, w, 1)
+            src.getPixels(next, 0, w, 0, y1, w, 1)
+            for (x in 0 until w) {
+                val p = current[x]
+                val left = current[(x - 1).coerceAtLeast(0)]
+                val right = current[(x + 1).coerceAtMost(w - 1)]
+                val up = previous[x]
+                val down = next[x]
+
+                fun improve(channel: (Int) -> Int): Int {
+                    val center = channel(p).toFloat()
+                    val neighborhood = (
+                        channel(left) + channel(right) + channel(up) + channel(down)
+                    ) / 4f
+                    val sharpened = center + strength.coerceIn(0f, 1f) * (center - neighborhood)
+                    val contrasted = (sharpened - 127.5f) * 1.025f + 127.5f
+                    return contrasted.toInt().coerceIn(0, 255)
+                }
+
+                output[x] = Color.argb(
+                    Color.alpha(p),
+                    improve(Color::red),
+                    improve(Color::green),
+                    improve(Color::blue)
+                )
+            }
+            result.setPixels(output, 0, w, 0, y, w, 1)
+        }
+        return result
+    }
+
+    // FFHQ five-point template used by facexlib / RestoreFormer pipelines.
+    private val template = arrayOf(
+        floatArrayOf(192.98138f, 239.94708f), // image-left eye
+        floatArrayOf(318.90277f, 240.1936f),  // image-right eye
+        floatArrayOf(256.63416f, 314.01935f), // nose
+        floatArrayOf(201.26117f, 371.41043f), // image-left mouth corner
+        floatArrayOf(313.08905f, 371.15118f)  // image-right mouth corner
+    )
+
+    /**
+     * Least-squares affine fit from five detected source landmarks to the FFHQ template.
+     * Returns Android Matrix values mapping source-image coordinates into 512x512 model space.
+     */
+    private fun fitAffine(source: List<Pair<Float, Float>>, target: Array<FloatArray>): android.graphics.Matrix {
+        require(source.size == 5 && target.size == 5) { "Five facial landmarks are required." }
+        val normal = Array(3) { DoubleArray(3) }
+        val rhsX = DoubleArray(3)
+        val rhsY = DoubleArray(3)
+        for (i in 0 until 5) {
+            val x = source[i].first.toDouble()
+            val y = source[i].second.toDouble()
+            val row = doubleArrayOf(x, y, 1.0)
+            val tx = target[i][0].toDouble()
+            val ty = target[i][1].toDouble()
+            for (r in 0..2) {
+                rhsX[r] += row[r] * tx
+                rhsY[r] += row[r] * ty
+                for (c in 0..2) normal[r][c] += row[r] * row[c]
             }
         }
 
+        fun solve(matrix: Array<DoubleArray>, rhs: DoubleArray): DoubleArray {
+            val a = Array(3) { r -> DoubleArray(4) { c -> if (c < 3) matrix[r][c] else rhs[r] } }
+            for (col in 0..2) {
+                var pivot = col
+                for (r in col + 1..2) if (kotlin.math.abs(a[r][col]) > kotlin.math.abs(a[pivot][col])) pivot = r
+                if (kotlin.math.abs(a[pivot][col]) < 1e-9) {
+                    throw IllegalArgumentException("تعذرت محاذاة الوجه؛ جرّب صورة أوضح.")
+                }
+                val tmp = a[col]
+                a[col] = a[pivot]
+                a[pivot] = tmp
+                val divisor = a[col][col]
+                for (c in col..3) a[col][c] /= divisor
+                for (r in 0..2) {
+                    if (r == col) continue
+                    val factor = a[r][col]
+                    for (c in col..3) a[r][c] -= factor * a[col][c]
+                }
+            }
+            return DoubleArray(3) { a[it][3] }
+        }
+
+        val sx = solve(normal, rhsX)
+        val sy = solve(normal, rhsY)
+        val values = floatArrayOf(
+            sx[0].toFloat(), sx[1].toFloat(), sx[2].toFloat(),
+            sy[0].toFloat(), sy[1].toFloat(), sy[2].toFloat(),
+            0f, 0f, 1f
+        )
+        return android.graphics.Matrix().apply { setValues(values) }
+    }
+
+    fun restore(src: Bitmap, model: File, blend: Float, wholeImageSharpness: Float): Bitmap {
+        val detectorOptions = com.google.mlkit.vision.face.FaceDetectorOptions.Builder()
+            .setPerformanceMode(com.google.mlkit.vision.face.FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+            .setLandmarkMode(com.google.mlkit.vision.face.FaceDetectorOptions.LANDMARK_MODE_ALL)
+            .setClassificationMode(com.google.mlkit.vision.face.FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
+            .build()
+        val detector = com.google.mlkit.vision.face.FaceDetection.getClient(detectorOptions)
+        val faces = try {
+            com.google.android.gms.tasks.Tasks.await(
+                detector.process(com.google.mlkit.vision.common.InputImage.fromBitmap(src, 0))
+            )
+        } finally {
+            detector.close()
+        }
+        val face = faces.maxByOrNull { it.boundingBox.width().toLong() * it.boundingBox.height().toLong() }
+            ?: throw IllegalArgumentException("لم يُعثر على وجه. جرّب صورة يظهر فيها الوجه بوضوح.")
+
+        fun landmark(type: Int): Pair<Float, Float> {
+            val point = face.getLandmark(type)?.position
+                ?: throw IllegalArgumentException("لم تُكتشف نقاط الوجه الخمس بوضوح. جرّب صورة أمامية بإضاءة جيدة.")
+            return Pair(point.x, point.y)
+        }
+
+        // Sort by image x so the template order is consistent regardless of detector naming convention.
+        val eyes = listOf(
+            landmark(com.google.mlkit.vision.face.FaceLandmark.LEFT_EYE),
+            landmark(com.google.mlkit.vision.face.FaceLandmark.RIGHT_EYE)
+        ).sortedBy { it.first }
+        val mouth = listOf(
+            landmark(com.google.mlkit.vision.face.FaceLandmark.MOUTH_LEFT),
+            landmark(com.google.mlkit.vision.face.FaceLandmark.MOUTH_RIGHT)
+        ).sortedBy { it.first }
+        val points = listOf(
+            eyes[0],
+            eyes[1],
+            landmark(com.google.mlkit.vision.face.FaceLandmark.NOSE_BASE),
+            mouth[0],
+            mouth[1]
+        )
+
+        val forward = fitAffine(points, template)
+        val inverse = android.graphics.Matrix()
+        if (!forward.invert(inverse)) {
+            throw IllegalArgumentException("تعذرت محاذاة الوجه؛ جرّب صورة أخرى.")
+        }
+
+        // Warp the original image into the model's expected FFHQ five-point geometry.
+        val aligned = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
+        val alignedCanvas = android.graphics.Canvas(aligned)
+        alignedCanvas.drawColor(Color.rgb(127, 127, 127))
+        alignedCanvas.drawBitmap(src, forward, android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+
+        val pixels = IntArray(SIZE * SIZE)
+        aligned.getPixels(pixels, 0, SIZE, 0, 0, SIZE, SIZE)
+        val floats = FloatArray(3 * SIZE * SIZE)
+        for (y in 0 until SIZE) {
+            for (x in 0 until SIZE) {
+                val p = pixels[y * SIZE + x]
+                val i = y * SIZE + x
+                floats[i] = (Color.red(p) / 127.5f) - 1f
+                floats[SIZE * SIZE + i] = (Color.green(p) / 127.5f) - 1f
+                floats[2 * SIZE * SIZE + i] = (Color.blue(p) / 127.5f) - 1f
+            }
+        }
+
+        val restoredPixels = IntArray(SIZE * SIZE)
         val env = OrtEnvironment.getEnvironment()
         val options = OrtSession.SessionOptions()
         options.setIntraOpNumThreads(2)
         env.createSession(model.absolutePath, options).use { session ->
-            OnnxTensor.createTensor(env, FloatBuffer.wrap(floats), longArrayOf(1, 3, 512, 512)).use { tensor ->
+            OnnxTensor.createTensor(env, FloatBuffer.wrap(floats), longArrayOf(1, 3, SIZE.toLong(), SIZE.toLong())).use { tensor ->
                 session.run(mapOf(session.inputNames.first() to tensor)).use { result ->
                     @Suppress("UNCHECKED_CAST")
                     val output = result[0].value as Array<Array<Array<FloatArray>>>
-                    val restoredPixels = IntArray(512 * 512)
-                    for (y in 0 until 512) {
-                        for (x in 0 until 512) {
-                            val i = y * 512 + x
+                    for (y in 0 until SIZE) {
+                        for (x in 0 until SIZE) {
+                            val i = y * SIZE + x
                             val r = ((output[0][0][y][x] + 1f) * 127.5f).toInt().coerceIn(0, 255)
                             val g = ((output[0][1][y][x] + 1f) * 127.5f).toInt().coerceIn(0, 255)
                             val b = ((output[0][2][y][x] + 1f) * 127.5f).toInt().coerceIn(0, 255)
                             restoredPixels[i] = Color.rgb(r, g, b)
                         }
                     }
-                    val restored512 = Bitmap.createBitmap(restoredPixels, 512, 512, Bitmap.Config.ARGB_8888)
-                    val restoredCrop = Bitmap.createScaledBitmap(restored512, size, size, true)
-                    val outputBitmap = src.copy(Bitmap.Config.ARGB_8888, true)
-                    val originalPixels = IntArray(size * size)
-                    val restored = IntArray(size * size)
-                    crop.getPixels(originalPixels, 0, size, 0, 0, size, size)
-                    restoredCrop.getPixels(restored, 0, size, 0, 0, size, size)
-                    val amount = blend.coerceIn(0f, 1f)
-                    for (i in originalPixels.indices) {
-                        val a = originalPixels[i]
-                        val b = restored[i]
-                        fun mix(c1: Int, c2: Int) = (c1 + (c2 - c1) * amount).toInt().coerceIn(0, 255)
-                        originalPixels[i] = Color.rgb(
-                            mix(Color.red(a), Color.red(b)),
-                            mix(Color.green(a), Color.green(b)),
-                            mix(Color.blue(a), Color.blue(b))
-                        )
-                    }
-                    outputBitmap.setPixels(originalPixels, 0, size, left, top, size, size)
-                    return outputBitmap
                 }
             }
         }
+
+        val restoredAligned = Bitmap.createBitmap(restoredPixels, SIZE, SIZE, Bitmap.Config.ARGB_8888)
+
+        // Inverse-warp the restored face back to the exact original-image coordinate system.
+        val overlay = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        val overlayCanvas = android.graphics.Canvas(overlay)
+        overlayCanvas.drawBitmap(
+            restoredAligned,
+            inverse,
+            android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+        )
+
+        // Keep the whole frame gently enhanced; the AI restoration is blended over the face region.
+        val outputBitmap = enhanceWholeImage(src, wholeImageSharpness)
+        val box = face.boundingBox
+        val left = (box.left - box.width() * 0.35f).toInt().coerceAtLeast(0)
+        val top = (box.top - box.height() * 0.35f).toInt().coerceAtLeast(0)
+        val right = (box.right + box.width() * 0.35f).toInt().coerceAtMost(src.width)
+        val bottom = (box.bottom + box.height() * 0.45f).toInt().coerceAtMost(src.height)
+        val width = right - left
+        val height = bottom - top
+        if (width <= 0 || height <= 0) return outputBitmap
+
+        val originalRegion = IntArray(width * height)
+        val overlayRegion = IntArray(width * height)
+        outputBitmap.getPixels(originalRegion, 0, width, left, top, width, height)
+        overlay.getPixels(overlayRegion, 0, width, left, top, width, height)
+        val amount = blend.coerceIn(0f, 1f)
+        val cx = (box.left + box.right) / 2f
+        val cy = (box.top + box.bottom) / 2f
+        val rx = (box.width() * 0.78f).coerceAtLeast(1f)
+        val ry = (box.height() * 0.90f).coerceAtLeast(1f)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val i = y * width + x
+                val p = overlayRegion[i]
+                if (Color.alpha(p) == 0) continue
+                val px = left + x + 0.5f
+                val py = top + y + 0.5f
+                val dx = (px - cx) / rx
+                val dy = (py - cy) / ry
+                val distance = kotlin.math.sqrt(dx * dx + dy * dy)
+                val mask = when {
+                    distance <= 0.72f -> 1f
+                    distance >= 1f -> 0f
+                    else -> {
+                        val t = ((1f - distance) / 0.28f).coerceIn(0f, 1f)
+                        t * t * (3f - 2f * t)
+                    }
+                }
+                val alpha = amount * mask * (Color.alpha(p) / 255f)
+                if (alpha <= 0f) continue
+                val original = originalRegion[i]
+                fun mix(a: Int, b: Int) = (a + (b - a) * alpha).toInt().coerceIn(0, 255)
+                originalRegion[i] = Color.rgb(
+                    mix(Color.red(original), Color.red(p)),
+                    mix(Color.green(original), Color.green(p)),
+                    mix(Color.blue(original), Color.blue(p))
+                )
+            }
+        }
+        outputBitmap.setPixels(originalRegion, 0, width, left, top, width, height)
+        return outputBitmap
     }
 }
