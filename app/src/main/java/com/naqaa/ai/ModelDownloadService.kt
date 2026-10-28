@@ -19,11 +19,13 @@ class ModelDownloadService : Service() {
     companion object {
         const val ACTION_START = "com.naqaa.ai.action.START_MODEL_DOWNLOAD"
         const val ACTION_START_CODEFORMER = "com.naqaa.ai.action.START_CODEFORMER_DOWNLOAD"
+        const val ACTION_START_REALESRGAN = "com.naqaa.ai.action.START_REALESRGAN_DOWNLOAD"
         const val PREFS = "naqaa_model_download"
         private const val CHANNEL_ID = "naqaa_model_downloads"
         private const val NOTIFICATION_ID = 4101
         private const val NAFNET_URL = "https://huggingface.co/opencv/deblurring_nafnet/resolve/main/deblurring_nafnet_2025may.onnx?download=true"
         private const val CODEFORMER_URL = "https://huggingface.co/bluefoxcreation/Codeformer-ONNX/resolve/main/codeformer.onnx?download=true"
+        private const val REALESRGAN_URL = "https://huggingface.co/skillsafe-ai/realesrgan-x4plus/resolve/main/model.onnx?download=true"
     }
 
     private val executor = Executors.newSingleThreadExecutor()
@@ -36,7 +38,8 @@ class ModelDownloadService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val codeformer = intent?.action == ACTION_START_CODEFORMER
-        val title = if (codeformer) "CodeFormer" else "NAFNet"
+        val realesrgan = intent?.action == ACTION_START_REALESRGAN
+        val title = when { realesrgan -> "Real-ESRGAN"; codeformer -> "CodeFormer"; else -> "NAFNet" }
         val notification = buildNotification("يتم تجهيز تنزيل نموذج $title", 0, true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
@@ -45,19 +48,19 @@ class ModelDownloadService : Service() {
         }
         if (!isDownloading) {
             isDownloading = true
-            executor.execute { downloadModel(codeformer) }
+            executor.execute { downloadModel(codeformer, realesrgan) }
         }
         return START_STICKY
     }
 
-    private fun downloadModel(codeformer: Boolean) {
+    private fun downloadModel(codeformer: Boolean, realesrgan: Boolean) {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        val prefix = if (codeformer) "codeformer_" else "nafnet_"
-        val title = if (codeformer) "CodeFormer" else "NAFNet"
-        val url = if (codeformer) CODEFORMER_URL else NAFNET_URL
-        val minimumBytes = if (codeformer) 300_000_000L else 80_000_000L
-        val expectedBytes = if (codeformer) 377_000_000L else 92_000_000L
-        val fileName = if (codeformer) "codeformer.onnx" else "nafnet_deblur.onnx"
+        val prefix = when { realesrgan -> "realesrgan_"; codeformer -> "codeformer_"; else -> "nafnet_" }
+        val title = when { realesrgan -> "Real-ESRGAN"; codeformer -> "CodeFormer"; else -> "NAFNet" }
+        val url = when { realesrgan -> REALESRGAN_URL; codeformer -> CODEFORMER_URL; else -> NAFNET_URL }
+        val minimumBytes = when { realesrgan -> 60_000_000L; codeformer -> 300_000_000L; else -> 80_000_000L }
+        val expectedBytes = when { realesrgan -> 64_000_000L; codeformer -> 377_000_000L; else -> 92_000_000L }
+        val fileName = when { realesrgan -> "realesrgan_x4plus.onnx"; codeformer -> "codeformer.onnx"; else -> "nafnet_deblur.onnx" }
         val destination = File(filesDir, fileName)
         val partial = File(filesDir, "$fileName.download")
         try {
