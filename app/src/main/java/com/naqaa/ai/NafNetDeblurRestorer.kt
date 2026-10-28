@@ -6,7 +6,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.nio.DoubleBuffer
+import java.nio.FloatBuffer
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -90,31 +90,28 @@ internal object NafNetDeblurRestorer {
 
             for (top in yStarts) {
                 for (left in xStarts) {
-                    val input = DoubleArray(3 * TILE * TILE)
+                    val input = FloatArray(3 * TILE * TILE)
                     for (y in 0 until TILE) {
                         val sy = (top + y).coerceIn(0, height - 1)
                         for (x in 0 until TILE) {
                             val sx = (left + x).coerceIn(0, width - 1)
                             val color = source.getPixel(sx, sy)
                             val i = y * TILE + x
-                            input[i] = Color.red(color) / 255.0
-                            input[TILE * TILE + i] = Color.green(color) / 255.0
-                            input[2 * TILE * TILE + i] = Color.blue(color) / 255.0
+                            input[i] = Color.red(color) / 255f
+                            input[TILE * TILE + i] = Color.green(color) / 255f
+                            input[2 * TILE * TILE + i] = Color.blue(color) / 255f
                         }
                     }
 
                     OnnxTensor.createTensor(
                         env,
-                        DoubleBuffer.wrap(input),
+                        FloatBuffer.wrap(input),
                         longArrayOf(1, 3, TILE.toLong(), TILE.toLong())
                     ).use { tensor ->
                         session.run(mapOf(inputName to tensor)).use { result ->
-                            val raw = result[0].value
-                            val values = when (raw) {
-                                is Array<*> -> raw as? Array<Array<Array<DoubleArray>>>
-                                    ?: throw IllegalStateException("صيغة خرج النموذج غير متوقعة")
-                                else -> throw IllegalStateException("نوع خرج النموذج غير متوقع: ${raw?.javaClass?.simpleName}")
-                            }
+                            @Suppress("UNCHECKED_CAST")
+                            val values = result[0].value as? Array<Array<Array<FloatArray>>>
+                                ?: throw IllegalStateException("صيغة خرج النموذج غير متوقعة")
                             if (values[0].size < 3 || values[0][0].size < TILE || values[0][0][0].size < TILE) {
                                 throw IllegalStateException("أبعاد خرج النموذج غير متوافقة")
                             }
@@ -129,9 +126,9 @@ internal object NafNetDeblurRestorer {
                                 for (x in localLeft until localRight) {
                                     val gx = left + x
                                     if (gx !in 0 until width) continue
-                                    val r = (values[0][0][y][x] * 255.0).toInt().coerceIn(0, 255)
-                                    val g = (values[0][1][y][x] * 255.0).toInt().coerceIn(0, 255)
-                                    val b = (values[0][2][y][x] * 255.0).toInt().coerceIn(0, 255)
+                                    val r = (values[0][0][y][x] * 255f).toInt().coerceIn(0, 255)
+                                    val g = (values[0][1][y][x] * 255f).toInt().coerceIn(0, 255)
+                                    val b = (values[0][2][y][x] * 255f).toInt().coerceIn(0, 255)
                                     outputPixels[gy * width + gx] = Color.rgb(r, g, b)
                                 }
                             }
