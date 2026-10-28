@@ -67,7 +67,7 @@ private fun NaqaaApp() {
     var downloadProgress by remember { mutableFloatStateOf(0f) }
     var downloadBytes by remember { mutableLongStateOf(0L) }
     var downloadTotal by remember { mutableLongStateOf(-1L) }
-    var modelMode by remember { mutableStateOf("both") }
+    var modelMode by remember { mutableStateOf("nafnet") }
     var compareMode by remember { mutableStateOf(true) }
     val modelFile = remember { File(context.filesDir, "nafnet_deblur.onnx") }
     val codeFormerFile = remember { File(context.filesDir, "codeformer.onnx") }
@@ -260,8 +260,8 @@ private fun NaqaaApp() {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 RadioButton(selected = modelMode == "both", onClick = { modelMode = "both" })
                                 Column {
-                                    Text("النموذجان معًا (افتراضي)", fontWeight = FontWeight.SemiBold)
-                                    Text("NAFNet للصورة كاملة ثم CodeFormer للوجه", style = MaterialTheme.typography.bodySmall)
+                                    Text("النموذجان معًا (تجريبي)", fontWeight = FontWeight.SemiBold)
+                                    Text("قد يحسّن الوجه تقديريًا؛ قد يغيّر بعض الملامح", style = MaterialTheme.typography.bodySmall)
                                 }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
