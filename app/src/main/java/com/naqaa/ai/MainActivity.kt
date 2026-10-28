@@ -71,6 +71,8 @@ private fun NaqaaApp() {
     var compareMode by remember { mutableStateOf(true) }
     val modelFile = remember { File(context.filesDir, "nafnet_deblur.onnx") }
     val codeFormerFile = remember { File(context.filesDir, "codeformer.onnx") }
+    val realEsrganFile = remember { File(context.filesDir, "realesrgan_x4plus.onnx") }
+    var realEsrganReady by remember { mutableStateOf(realEsrganFile.exists() && realEsrganFile.length() > 60_000_000L) }
     var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 80_000_000L) }
     var codeFormerReady by remember { mutableStateOf(codeFormerFile.exists() && codeFormerFile.length() > 300_000_000L) }
 
@@ -80,14 +82,19 @@ private fun NaqaaApp() {
         while (true) {
             val nafState = prefs.getString("nafnet_state", "idle") ?: "idle"
             val faceState = prefs.getString("codeformer_state", "idle") ?: "idle"
+            val realState = prefs.getString("realesrgan_state", "idle") ?: "idle"
             val faceActive = faceState == "downloading"
-            val prefix = if (faceActive) "codeformer_" else "nafnet_"
+            val realActive = realState == "downloading"
+            val prefix = when { faceActive -> "codeformer_"; realActive -> "realesrgan_"; else -> "nafnet_" }
             downloadBytes = prefs.getLong(prefix + "downloaded", 0L)
             downloadTotal = prefs.getLong(prefix + "total", -1L)
             if (downloadTotal > 0L) downloadProgress = (downloadBytes.toFloat() / downloadTotal.toFloat()).coerceIn(0f, 1f)
             if (modelFile.exists() && modelFile.length() > 80_000_000L) modelReady = true
             if (codeFormerFile.exists() && codeFormerFile.length() > 300_000_000L) codeFormerReady = true
-            if (faceActive) {
+            if (realEsrganFile.exists() && realEsrganFile.length() > 60_000_000L) realEsrganReady = true
+            if (realActive) {
+                status = "جارٍ تنزيل Real-ESRGAN في الخلفية..."
+            } else if (faceActive) {
                 status = "جارٍ تنزيل CodeFormer في الخلفية..."
             } else if (nafState == "downloading" && !modelReady) {
                 status = "جارٍ تنزيل NAFNet في الخلفية..."
@@ -272,11 +279,18 @@ private fun NaqaaApp() {
                                 RadioButton(selected = modelMode == "codeformer", onClick = { modelMode = "codeformer" })
                                 Text("CodeFormer فقط — ترميم الوجه")
                             }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = modelMode == "realesrgan", onClick = { modelMode = "realesrgan" })
+                                Column {
+                                    Text("Real-ESRGAN x4plus — اختبار جديد", fontWeight = FontWeight.SemiBold)
+                                    Text("تحسين تفاصيل الصورة كاملة وتكبيرها 4×؛ قد لا يزيل كل الضبابية", style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
                         }
                     }
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        "NAFNet يعالج الصورة كاملة. CodeFormer يركّز على الوجه وقد يعيد بناء بعض التفاصيل تقديريًا.",
+                        "NAFNet يختبر إزالة ضبابية الحركة؛ CodeFormer يركّز على الوجه؛ Real-ESRGAN يختبر استعادة التفاصيل والتكبير على الصورة كاملة.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.secondary
                     )
@@ -290,13 +304,13 @@ private fun NaqaaApp() {
                                 try {
                                     val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
                                     downloadProgress = 0f
-                                    suspend fun ensureDownloaded(isFaceModel: Boolean) {
-                                        val file = if (isFaceModel) codeFormerFile else modelFile
-                                        val ready = if (isFaceModel) codeFormerReady else modelReady
-                                        val minimum = if (isFaceModel) 300_000_000L else 80_000_000L
-                                        val prefix = if (isFaceModel) "codeformer_" else "nafnet_"
-                                        val action = if (isFaceModel) ModelDownloadService.ACTION_START_CODEFORMER else ModelDownloadService.ACTION_START
-                                        val label = if (isFaceModel) "CodeFormer" else "NAFNet"
+                                    suspend fun ensureDownloaded(isFaceModel: Boolean, isRealModel: Boolean = false) {
+                                        val file = when { isRealModel -> realEsrganFile; isFaceModel -> codeFormerFile; else -> modelFile }
+                                        val ready = when { isRealModel -> realEsrganReady; isFaceModel -> codeFormerReady; else -> modelReady }
+                                        val minimum = when { isRealModel -> 60_000_000L; isFaceModel -> 300_000_000L; else -> 80_000_000L }
+                                        val prefix = when { isRealModel -> "realesrgan_"; isFaceModel -> "codeformer_"; else -> "nafnet_" }
+                                        val action = when { isRealModel -> ModelDownloadService.ACTION_START_REALESRGAN; isFaceModel -> ModelDownloadService.ACTION_START_CODEFORMER; else -> ModelDownloadService.ACTION_START }
+                                        val label = when { isRealModel -> "Real-ESRGAN"; isFaceModel -> "CodeFormer"; else -> "NAFNet" }
                                         if (ready || (file.exists() && file.length() > minimum)) return
                                         val state = prefs.getString(prefix + "state", "idle")
                                         if (state != "downloading") {
@@ -311,10 +325,11 @@ private fun NaqaaApp() {
                                                 throw IllegalStateException(prefs.getString(prefix + "error", "تعذّر تنزيل $label"))
                                             }
                                         }
-                                        if (isFaceModel) codeFormerReady = true else modelReady = true
+                                        when { isRealModel -> realEsrganReady = true; isFaceModel -> codeFormerReady = true; else -> modelReady = true }
                                     }
                                     if (modelMode == "both" || modelMode == "nafnet") ensureDownloaded(false)
                                     if (modelMode == "both" || modelMode == "codeformer") ensureDownloaded(true)
+                                    if (modelMode == "realesrgan") ensureDownloaded(false, true)
                                     status = "جارٍ تطبيق النماذج المختارة..."
                                     enhanced = withContext(Dispatchers.Default) {
                                         var result = source
@@ -323,6 +338,9 @@ private fun NaqaaApp() {
                                         }
                                         if (modelMode == "both" || modelMode == "codeformer") {
                                             result = CodeFormerRestorer.restore(result, codeFormerFile)
+                                        }
+                                        if (modelMode == "realesrgan") {
+                                            result = RealEsrganRestorer.restore(result, realEsrganFile)
                                         }
                                         result
                                     }
@@ -338,7 +356,7 @@ private fun NaqaaApp() {
                     ) {
                         Icon(Icons.Default.AutoFixHigh, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text(if ((modelMode == "nafnet" && modelReady) || (modelMode == "codeformer" && codeFormerReady) || (modelMode == "both" && modelReady && codeFormerReady)) "ابدأ التحسين" else "تنزيل النماذج المطلوبة بالخلفية")
+                        Text(if ((modelMode == "nafnet" && modelReady) || (modelMode == "codeformer" && codeFormerReady) || (modelMode == "both" && modelReady && codeFormerReady) || (modelMode == "realesrgan" && realEsrganReady)) "ابدأ التحسين" else "تنزيل النموذج المطلوب بالخلفية")
                     }
                     Spacer(Modifier.height(8.dp))
                     Spacer(Modifier.height(8.dp))
