@@ -10,12 +10,9 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import com.google.android.gms.tasks.Tasks
 import java.io.File
-import java.nio.FloatBuffer
+import java.nio.DoubleBuffer
 
-/**
- * Experimental CodeFormer ONNX face restoration.
- * Uses a padded square crop from ML Kit face detection; alignment quality varies by pose.
- */
+/** Experimental CodeFormer ONNX face restoration. */
 internal object CodeFormerRestorer {
     private const val SIZE = 512
 
@@ -50,12 +47,12 @@ internal object CodeFormerRestorer {
         val pixels = IntArray(SIZE * SIZE)
         crop.getPixels(pixels, 0, SIZE, 0, 0, SIZE, SIZE)
         val plane = SIZE * SIZE
-        val input = FloatArray(3 * plane)
+        val input = DoubleArray(3 * plane)
         for (i in pixels.indices) {
             val p = pixels[i]
-            input[i] = Color.red(p) / 127.5f - 1f
-            input[plane + i] = Color.green(p) / 127.5f - 1f
-            input[2 * plane + i] = Color.blue(p) / 127.5f - 1f
+            input[i] = Color.red(p) / 127.5 - 1.0
+            input[plane + i] = Color.green(p) / 127.5 - 1.0
+            input[2 * plane + i] = Color.blue(p) / 127.5 - 1.0
         }
 
         val env = OrtEnvironment.getEnvironment()
@@ -67,26 +64,26 @@ internal object CodeFormerRestorer {
             val tensors = mutableMapOf<String, OnnxTensor>()
             try {
                 tensors[inputNames[0]] = OnnxTensor.createTensor(
-                    env, FloatBuffer.wrap(input), longArrayOf(1, 3, SIZE.toLong(), SIZE.toLong())
+                    env, DoubleBuffer.wrap(input), longArrayOf(1, 3, SIZE.toLong(), SIZE.toLong())
                 )
                 if (inputNames.size > 1) {
                     tensors[inputNames[1]] = OnnxTensor.createTensor(
-                        env, FloatBuffer.wrap(floatArrayOf(fidelity.coerceIn(0f, 1f))), longArrayOf(1)
+                        env, DoubleBuffer.wrap(doubleArrayOf(fidelity.coerceIn(0f, 1f).toDouble())), longArrayOf(1)
                     )
                 }
                 session.run(tensors).use { result ->
                     val raw = result[0].value
                     @Suppress("UNCHECKED_CAST")
-                    val output = raw as? Array<Array<Array<FloatArray>>>
+                    val output = raw as? Array<Array<Array<DoubleArray>>>
                         ?: throw IllegalStateException("صيغة خرج CodeFormer غير مدعومة في هذه النسخة.")
                     if (output[0].size < 3 || output[0][0].size < SIZE || output[0][0][0].size < SIZE) {
                         throw IllegalStateException("أبعاد خرج CodeFormer غير متوافقة.")
                     }
                     for (y in 0 until SIZE) for (x in 0 until SIZE) {
                         val i = y * SIZE + x
-                        val r = ((output[0][0][y][x] + 1f) * 127.5f).toInt().coerceIn(0, 255)
-                        val g = ((output[0][1][y][x] + 1f) * 127.5f).toInt().coerceIn(0, 255)
-                        val b = ((output[0][2][y][x] + 1f) * 127.5f).toInt().coerceIn(0, 255)
+                        val r = ((output[0][0][y][x] + 1.0) * 127.5).toInt().coerceIn(0, 255)
+                        val g = ((output[0][1][y][x] + 1.0) * 127.5).toInt().coerceIn(0, 255)
+                        val b = ((output[0][2][y][x] + 1.0) * 127.5).toInt().coerceIn(0, 255)
                         restoredPixels[i] = Color.rgb(r, g, b)
                     }
                 }
