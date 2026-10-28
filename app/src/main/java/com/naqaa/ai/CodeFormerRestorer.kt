@@ -8,11 +8,13 @@ import android.graphics.Rect
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import ai.onnxruntime.TensorInfo
 import com.google.android.gms.tasks.Tasks
 import java.io.File
 import java.nio.DoubleBuffer
+import java.nio.FloatBuffer
 
-/** Experimental CodeFormer ONNX face restoration. */
+/** Experimental CodeFormer ONNX face restoration with tensor types read from model metadata. */
 internal object CodeFormerRestorer {
     private const val SIZE = 512
 
@@ -39,20 +41,18 @@ internal object CodeFormerRestorer {
         val crop = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(crop)
         canvas.drawColor(Color.rgb(127, 127, 127))
-        val sourceRect = Rect(left, top, left + side, top + side)
-        val destRect = Rect(0, 0, SIZE, SIZE)
-        val paint = Paint(Paint.FILTER_BITMAP_FLAG)
-        canvas.drawBitmap(source, sourceRect, destRect, paint)
+        canvas.drawBitmap(source, Rect(left, top, left + side, top + side),
+            Rect(0, 0, SIZE, SIZE), Paint(Paint.FILTER_BITMAP_FLAG))
 
         val pixels = IntArray(SIZE * SIZE)
         crop.getPixels(pixels, 0, SIZE, 0, 0, SIZE, SIZE)
         val plane = SIZE * SIZE
-        val input = DoubleArray(3 * plane)
+        val input = FloatArray(3 * plane)
         for (i in pixels.indices) {
             val p = pixels[i]
-            input[i] = Color.red(p) / 127.5 - 1.0
-            input[plane + i] = Color.green(p) / 127.5 - 1.0
-            input[2 * plane + i] = Color.blue(p) / 127.5 - 1.0
+            input[i] = Color.red(p) / 127.5f - 1f
+            input[plane + i] = Color.green(p) / 127.5f - 1f
+            input[2 * plane + i] = Color.blue(p) / 127.5f - 1f
         }
 
         val env = OrtEnvironment.getEnvironment()
@@ -63,27 +63,42 @@ internal object CodeFormerRestorer {
             if (inputNames.isEmpty()) throw IllegalStateException("نموذج CodeFormer لا يحتوي على مدخلات.")
             val tensors = mutableMapOf<String, OnnxTensor>()
             try {
-                tensors[inputNames[0]] = OnnxTensor.createTensor(
-                    env, DoubleBuffer.wrap(input), longArrayOf(1, 3, SIZE.toLong(), SIZE.toLong())
-                )
-                if (inputNames.size > 1) {
-                    tensors[inputNames[1]] = OnnxTensor.createTensor(
-                        env, DoubleBuffer.wrap(doubleArrayOf(fidelity.coerceIn(0f, 1f).toDouble())), longArrayOf(1)
-                    )
+                for ((index, name) in inputNames.withIndex()) {
+                    val info = session.inputInfo[name]?.info as? TensorInfo
+                        ?: throw IllegalStateException("تعذر قراءة وصف المدخل: $name")
+                    val shape = if (index == 0) longArrayOf(1, 3, SIZE.toLong(), SIZE.toLong())
+                        else info.shape.map { if (it <= 0L) 1L else it }.toLongArray()
+                    val values = if (index == 0) input else floatArrayOf(fidelity.coerceIn(0f, 1f))
+                    tensors[name] = when (info.type.toString().lowercase()) {
+                        "double" -> OnnxTensor.createTensor(env,
+                            DoubleBuffer.wrap(DoubleArray(values.size) { values[it].toDouble() }), shape)
+                        "float" -> OnnxTensor.createTensor(env, FloatBuffer.wrap(values), shape)
+                        else -> throw IllegalStateException("نوع مدخل CodeFormer غير مدعوم: ${info.type} ($name)")
+                    }
                 }
                 session.run(tensors).use { result ->
                     val raw = result[0].value
-                    @Suppress("UNCHECKED_CAST")
-                    val output = raw as? Array<Array<Array<DoubleArray>>>
-                        ?: throw IllegalStateException("صيغة خرج CodeFormer غير مدعومة في هذه النسخة.")
-                    if (output[0].size < 3 || output[0][0].size < SIZE || output[0][0][0].size < SIZE) {
-                        throw IllegalStateException("أبعاد خرج CodeFormer غير متوافقة.")
+                    val info = result[0].info as? TensorInfo
+                        ?: throw IllegalStateException("تعذر قراءة وصف خرج CodeFormer.")
+                    val output = when (info.type.toString().lowercase()) {
+                        "double" -> {
+                            @Suppress("UNCHECKED_CAST")
+                            val a = raw as? Array<Array<Array<DoubleArray>>>
+                                ?: throw IllegalStateException("صيغة خرج CodeFormer غير متوقعة.")
+                            Array(3) { c -> FloatArray(plane) { i -> a[0][c][i / SIZE][i % SIZE].toFloat() } }
+                        }
+                        "float" -> {
+                            @Suppress("UNCHECKED_CAST")
+                            val a = raw as? Array<Array<Array<FloatArray>>>
+                                ?: throw IllegalStateException("صيغة خرج CodeFormer غير متوقعة.")
+                            Array(3) { c -> FloatArray(plane) { i -> a[0][c][i / SIZE][i % SIZE] } }
+                        }
+                        else -> throw IllegalStateException("نوع خرج CodeFormer غير مدعوم: ${info.type}")
                     }
-                    for (y in 0 until SIZE) for (x in 0 until SIZE) {
-                        val i = y * SIZE + x
-                        val r = ((output[0][0][y][x] + 1.0) * 127.5).toInt().coerceIn(0, 255)
-                        val g = ((output[0][1][y][x] + 1.0) * 127.5).toInt().coerceIn(0, 255)
-                        val b = ((output[0][2][y][x] + 1.0) * 127.5).toInt().coerceIn(0, 255)
+                    for (i in 0 until plane) {
+                        val r = ((output[0][i] + 1f) * 127.5f).toInt().coerceIn(0, 255)
+                        val g = ((output[1][i] + 1f) * 127.5f).toInt().coerceIn(0, 255)
+                        val b = ((output[2][i] + 1f) * 127.5f).toInt().coerceIn(0, 255)
                         restoredPixels[i] = Color.rgb(r, g, b)
                     }
                 }
@@ -93,9 +108,8 @@ internal object CodeFormerRestorer {
         }
         val restoredCrop = Bitmap.createBitmap(restoredPixels, SIZE, SIZE, Bitmap.Config.ARGB_8888)
         val output = source.copy(Bitmap.Config.ARGB_8888, true)
-        val outputCanvas = Canvas(output)
-        val target = Rect(left, top, left + side, top + side)
-        outputCanvas.drawBitmap(restoredCrop, Rect(0, 0, SIZE, SIZE), target, Paint(Paint.FILTER_BITMAP_FLAG))
+        Canvas(output).drawBitmap(restoredCrop, Rect(0, 0, SIZE, SIZE),
+            Rect(left, top, left + side, top + side), Paint(Paint.FILTER_BITMAP_FLAG))
         crop.recycle()
         restoredCrop.recycle()
         return output
