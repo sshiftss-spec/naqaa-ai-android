@@ -13,7 +13,7 @@ import ai.onnxruntime.OrtSession
 
 /**
  * Experimental full-frame NAFNet deblurring.
- * 512px overlapping tiles avoid zero-sized intermediate tensors in the encoder.
+ * Overlapping tiles avoid zero-sized intermediate tensors in the encoder.
  */
 internal object NafNetDeblurRestorer {
     private const val MODEL_URL =
@@ -112,7 +112,8 @@ internal object NafNetDeblurRestorer {
                             @Suppress("UNCHECKED_CAST")
                             val values = result[0].value as? Array<Array<Array<FloatArray>>>
                                 ?: throw IllegalStateException("صيغة خرج النموذج غير متوقعة")
-                            if (values[0].size < 3 || values[0][0].size < TILE || values[0][0][0].size < TILE) {
+                            if (values.isEmpty() || values[0].size < 3 ||
+                                values[0][0].size < TILE || values[0][0][0].size < TILE) {
                                 throw IllegalStateException("أبعاد خرج النموذج غير متوافقة")
                             }
 
@@ -140,16 +141,18 @@ internal object NafNetDeblurRestorer {
         return Bitmap.createBitmap(outputPixels, width, height, Bitmap.Config.ARGB_8888)
     }
 
+    /**
+     * Distribute tile starts evenly across the image. The old fixed-step loop
+     * could add a regular tile and then a nearly identical end-aligned tile
+     * (e.g. x=448 and x=488 for a 1000px image), causing excessive overwrites.
+     */
     private fun tileStarts(size: Int): List<Int> {
         if (size <= TILE) return listOf(0)
-        val starts = mutableListOf<Int>()
-        var position = 0
-        while (position + TILE < size) {
-            starts.add(position)
-            position += STEP
-        }
         val last = size - TILE
-        if (starts.isEmpty() || starts.last() != last) starts.add(last)
-        return starts.distinct().sorted()
+        val tileCount = kotlin.math.ceil(last.toDouble() / STEP).toInt() + 1
+        if (tileCount <= 2) return listOf(0, last)
+        return (0 until tileCount).map { index ->
+            (last.toLong() * index / (tileCount - 1)).toInt()
+        }.distinct()
     }
 }
