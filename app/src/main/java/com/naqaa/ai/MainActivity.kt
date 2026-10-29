@@ -67,39 +67,22 @@ private fun NaqaaApp() {
     var downloadProgress by remember { mutableFloatStateOf(0f) }
     var downloadBytes by remember { mutableLongStateOf(0L) }
     var downloadTotal by remember { mutableLongStateOf(-1L) }
-    var modelMode by remember { mutableStateOf("nafnet") }
     var compareMode by remember { mutableStateOf(true) }
     val modelFile = remember { File(context.filesDir, "nafnet_deblur.onnx") }
-    val codeFormerFile = remember { File(context.filesDir, "codeformer.onnx") }
-    val realEsrganFile = remember { File(context.filesDir, "realesrgan_x4plus.onnx") }
-    var realEsrganReady by remember { mutableStateOf(realEsrganFile.exists() && realEsrganFile.length() > 60_000_000L) }
     var modelReady by remember { mutableStateOf(modelFile.exists() && modelFile.length() > 80_000_000L) }
-    var codeFormerReady by remember { mutableStateOf(codeFormerFile.exists() && codeFormerFile.length() > 300_000_000L) }
 
     // Observe background model downloads and refresh the progress bar when the app returns.
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
         while (true) {
             val nafState = prefs.getString("nafnet_state", "idle") ?: "idle"
-            val faceState = prefs.getString("codeformer_state", "idle") ?: "idle"
-            val realState = prefs.getString("realesrgan_state", "idle") ?: "idle"
-            val faceActive = faceState == "downloading"
-            val realActive = realState == "downloading"
-            val prefix = when { faceActive -> "codeformer_"; realActive -> "realesrgan_"; else -> "nafnet_" }
+            val prefix = "nafnet_"
             downloadBytes = prefs.getLong(prefix + "downloaded", 0L)
             downloadTotal = prefs.getLong(prefix + "total", -1L)
             if (downloadTotal > 0L) downloadProgress = (downloadBytes.toFloat() / downloadTotal.toFloat()).coerceIn(0f, 1f)
             if (modelFile.exists() && modelFile.length() > 80_000_000L) modelReady = true
-            if (codeFormerFile.exists() && codeFormerFile.length() > 300_000_000L) codeFormerReady = true
-            if (realEsrganFile.exists() && realEsrganFile.length() > 60_000_000L) realEsrganReady = true
-            if (realActive) {
-                status = "جارٍ تنزيل Real-ESRGAN في الخلفية..."
-            } else if (faceActive) {
-                status = "جارٍ تنزيل CodeFormer في الخلفية..."
-            } else if (nafState == "downloading" && !modelReady) {
+            if (nafState == "downloading" && !modelReady) {
                 status = "جارٍ تنزيل NAFNet في الخلفية..."
-            } else if (faceState == "error" && !codeFormerReady) {
-                status = "تعذّر تنزيل CodeFormer: " + (prefs.getString("codeformer_error", "خطأ غير معروف") ?: "خطأ غير معروف")
             } else if (nafState == "error" && !modelReady) {
                 status = "تعذّر تنزيل NAFNet: " + (prefs.getString("nafnet_error", "خطأ غير معروف") ?: "خطأ غير معروف")
             }
@@ -256,44 +239,14 @@ private fun NaqaaApp() {
                             modifier = Modifier.padding(top = 8.dp))
                     }
                     Spacer(Modifier.height(18.dp))
-                    Text(
-                        "اختر طريقة التحسين",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.align(Alignment.Start)
-                    )
+                    Text("النموذج المستخدم", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Start))
                     Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RadioButton(selected = modelMode == "both", onClick = { modelMode = "both" })
-                                Column {
-                                    Text("النموذجان معًا (تجريبي)", fontWeight = FontWeight.SemiBold)
-                                    Text("قد يحسّن الوجه تقديريًا؛ قد يغيّر بعض الملامح", style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RadioButton(selected = modelMode == "nafnet", onClick = { modelMode = "nafnet" })
-                                Text("NAFNet فقط — الصورة كاملة")
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RadioButton(selected = modelMode == "codeformer", onClick = { modelMode = "codeformer" })
-                                Text("CodeFormer فقط — ترميم الوجه")
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RadioButton(selected = modelMode == "realesrgan", onClick = { modelMode = "realesrgan" })
-                                Column {
-                                    Text("Real-ESRGAN x4plus — اختبار جديد", fontWeight = FontWeight.SemiBold)
-                                    Text("تحسين تفاصيل الصورة كاملة وتكبيرها 4×؛ قد لا يزيل كل الضبابية", style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
+                        Column(Modifier.padding(14.dp)) {
+                            Text("NAFNet — إزالة الضبابية من الصورة كاملة", fontWeight = FontWeight.SemiBold)
+                            Text("تستخدم هذه النسخة نموذجًا واحدًا فقط لتقليل التنزيل واستهلاك مساحة التخزين. لن يتم تنزيل CodeFormer أو Real-ESRGAN.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
                         }
                     }
                     Spacer(Modifier.height(12.dp))
-                    Text(
-                        "NAFNet يختبر إزالة ضبابية الحركة؛ CodeFormer يركّز على الوجه؛ Real-ESRGAN يختبر استعادة التفاصيل والتكبير على الصورة كاملة.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
                     Button(
                         modifier = Modifier.fillMaxWidth().height(52.dp),
                         enabled = !busy,
@@ -304,50 +257,33 @@ private fun NaqaaApp() {
                                 try {
                                     val prefs = context.getSharedPreferences(ModelDownloadService.PREFS, 0)
                                     downloadProgress = 0f
-                                    suspend fun ensureDownloaded(isFaceModel: Boolean, isRealModel: Boolean = false) {
-                                        val file = when { isRealModel -> realEsrganFile; isFaceModel -> codeFormerFile; else -> modelFile }
-                                        val ready = when { isRealModel -> realEsrganReady; isFaceModel -> codeFormerReady; else -> modelReady }
-                                        val minimum = when { isRealModel -> 60_000_000L; isFaceModel -> 300_000_000L; else -> 80_000_000L }
-                                        val prefix = when { isRealModel -> "realesrgan_"; isFaceModel -> "codeformer_"; else -> "nafnet_" }
-                                        val action = when { isRealModel -> ModelDownloadService.ACTION_START_REALESRGAN; isFaceModel -> ModelDownloadService.ACTION_START_CODEFORMER; else -> ModelDownloadService.ACTION_START }
-                                        val label = when { isRealModel -> "Real-ESRGAN"; isFaceModel -> "CodeFormer"; else -> "NAFNet" }
-                                        if (ready || (file.exists() && file.length() > minimum)) return
+                                    suspend fun ensureNafNetDownloaded() {
+                                        val minimum = 80_000_000L
+                                        val prefix = "nafnet_"
+                                        if (modelReady || (modelFile.exists() && modelFile.length() > minimum)) {
+                                            modelReady = true
+                                            return
+                                        }
                                         val state = prefs.getString(prefix + "state", "idle")
                                         if (state != "downloading") {
-                                            status = "بدء تنزيل $label في الخلفية..."
-                                            val intent = Intent(context, ModelDownloadService::class.java).setAction(action)
+                                            status = "بدء تنزيل NAFNet في الخلفية..."
+                                            val intent = Intent(context, ModelDownloadService::class.java)
+                                                .setAction(ModelDownloadService.ACTION_START)
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
                                             else context.startService(intent)
                                         }
-                                        while (!(file.exists() && file.length() > minimum)) {
+                                        while (!(modelFile.exists() && modelFile.length() > minimum)) {
                                             kotlinx.coroutines.delay(500)
                                             if (prefs.getString(prefix + "state", "idle") == "error") {
-                                                throw IllegalStateException(prefs.getString(prefix + "error", "تعذّر تنزيل $label"))
+                                                throw IllegalStateException(prefs.getString(prefix + "error", "تعذّر تنزيل NAFNet"))
                                             }
                                         }
-                                        when { isRealModel -> realEsrganReady = true; isFaceModel -> codeFormerReady = true; else -> modelReady = true }
+                                        modelReady = true
                                     }
-                                    if (modelMode == "both" || modelMode == "nafnet") ensureDownloaded(false)
-                                    if (modelMode == "both" || modelMode == "codeformer") ensureDownloaded(true)
-                                    if (modelMode == "realesrgan") ensureDownloaded(false, true)
-                                    status = "جارٍ تطبيق النماذج المختارة..."
+                                    ensureNafNetDownloaded()
+                                    status = "جارٍ تطبيق NAFNet على الصورة كاملة..."
                                     enhanced = withContext(Dispatchers.Default) {
-                                        var result = source
-                                        if (modelMode == "both" || modelMode == "nafnet") {
-                                            result = NafNetDeblurRestorer.restore(result, modelFile)
-                                        }
-                                        if (modelMode == "both" || modelMode == "codeformer") {
-                                            result = CodeFormerRestorer.restore(result, codeFormerFile)
-                                        }
-                                        if (modelMode == "realesrgan") {
-                                            val progressHandler = android.os.Handler(android.os.Looper.getMainLooper())
-                                            result = RealEsrganRestorer.restore(result, realEsrganFile) { done, total ->
-                                                progressHandler.post {
-                                                    status = "Real-ESRGAN: معالجة الجزء $done من $total"
-                                                }
-                                            }
-                                        }
-                                        result
+                                        NafNetDeblurRestorer.restore(source, modelFile)
                                     }
                                     compareMode = true
                                     status = "اكتملت المعالجة محليًا. قارن النتيجة بالأصل."
@@ -361,7 +297,7 @@ private fun NaqaaApp() {
                     ) {
                         Icon(Icons.Default.AutoFixHigh, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text(if ((modelMode == "nafnet" && modelReady) || (modelMode == "codeformer" && codeFormerReady) || (modelMode == "both" && modelReady && codeFormerReady) || (modelMode == "realesrgan" && realEsrganReady)) "ابدأ التحسين" else "تنزيل النموذج المطلوب بالخلفية")
+                        Text(if (modelReady) "ابدأ إزالة الضبابية" else "تنزيل NAFNet ثم إزالة الضبابية")
                     }
                     Spacer(Modifier.height(8.dp))
                     Spacer(Modifier.height(8.dp))
