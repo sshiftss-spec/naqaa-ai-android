@@ -80,6 +80,8 @@ internal object NafNetDeblurRestorer {
         val width = source.width
         val height = source.height
         val outputPixels = IntArray(width * height)
+        val sourcePixels = IntArray(width * height)
+        source.getPixels(sourcePixels, 0, width, 0, 0, width, height)
         val env = OrtEnvironment.getEnvironment()
         val options = OrtSession.SessionOptions().apply { setIntraOpNumThreads(2) }
 
@@ -151,7 +153,7 @@ internal object NafNetDeblurRestorer {
                                             outputMax = maxOf(outputMax, raw)
                                         }
                                     }
-                                    val sourceColor = source.getPixel(gx, gy)
+                                    val sourceColor = sourcePixels[gy * width + gx]
                                     absDiffSum += kotlin.math.abs((rawR * 255f).toInt().coerceIn(0, 255) - Color.red(sourceColor))
                                     absDiffSum += kotlin.math.abs((rawG * 255f).toInt().coerceIn(0, 255) - Color.green(sourceColor))
                                     absDiffSum += kotlin.math.abs((rawB * 255f).toInt().coerceIn(0, 255) - Color.blue(sourceColor))
