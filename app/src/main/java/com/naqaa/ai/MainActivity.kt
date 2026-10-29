@@ -340,7 +340,12 @@ private fun NaqaaApp() {
                                             result = CodeFormerRestorer.restore(result, codeFormerFile)
                                         }
                                         if (modelMode == "realesrgan") {
-                                            result = RealEsrganRestorer.restore(result, realEsrganFile)
+                                            val progressHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                                            result = RealEsrganRestorer.restore(result, realEsrganFile) { done, total ->
+                                                progressHandler.post {
+                                                    status = "Real-ESRGAN: معالجة الجزء $done من $total"
+                                                }
+                                            }
                                         }
                                         result
                                     }
