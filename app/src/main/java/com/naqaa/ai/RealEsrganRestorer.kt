@@ -20,10 +20,11 @@ internal object RealEsrganRestorer {
     private const val STEP = TILE - 2 * OVERLAP
     private const val SCALE = 4
 
-    fun restore(source: Bitmap, model: File): Bitmap {
+    fun restore(source: Bitmap, model: File, onProgress: (Int, Int) -> Unit = { _, _ -> }): Bitmap {
         require(model.exists() && model.length() > 60_000_000L) { "ملف Real-ESRGAN غير مكتمل؛ أعد تنزيل النموذج." }
-        // Bound working memory for large camera photos. Output is 4x this working image.
-        val maxSide = 1024
+        // Conservative first-run limit: large 4x inference on mobile CPU can take a very long time.
+        // Keep this test to 512px on the longest side until on-device speed is measured.
+        val maxSide = 512
         val ratio = min(1f, maxSide.toFloat() / maxOf(source.width, source.height))
         val input = if (ratio < 1f) Bitmap.createScaledBitmap(
             source, (source.width * ratio).toInt().coerceAtLeast(1),
@@ -40,6 +41,8 @@ internal object RealEsrganRestorer {
             require(inputType.shape.size == 4 && inputType.shape[1] == 3L) {
                 "بنية نموذج Real-ESRGAN غير متوافقة (المطلوب NCHW RGB)."
             }
+            val totalTiles = ((input.width + STEP - 1) / STEP) * ((input.height + STEP - 1) / STEP)
+            var completedTiles = 0
             var top = 0
             while (top < input.height) {
                 var left = 0
@@ -100,6 +103,8 @@ internal object RealEsrganRestorer {
                     }
                     tile.recycle()
                     restored.recycle()
+                    completedTiles++
+                    onProgress(completedTiles, totalTiles)
                     left += STEP
                 }
                 top += STEP
