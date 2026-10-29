@@ -2,6 +2,7 @@ package com.naqaa.ai
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -85,6 +86,16 @@ internal object NafNetDeblurRestorer {
         env.createSession(modelFile.absolutePath, options).use { session ->
             val inputName = session.inputNames.firstOrNull()
                 ?: throw IllegalStateException("النموذج لا يحتوي على مدخل")
+            val outputName = session.outputNames.firstOrNull()
+                ?: throw IllegalStateException("النموذج لا يحتوي على خرج")
+            val inputInfo = session.inputInfo[inputName]?.info as? ai.onnxruntime.TensorInfo
+            val outputInfo = session.outputInfo[outputName]?.info as? ai.onnxruntime.TensorInfo
+            Log.i("NaqaaNAFNet", "Model input=$inputName shape=${inputInfo?.shape?.contentToString()} type=${inputInfo?.type}; output=$outputName shape=${outputInfo?.shape?.contentToString()} type=${outputInfo?.type}")
+            var comparedChannels = 0L
+            var absDiffSum = 0L
+            var outputMin = Float.POSITIVE_INFINITY
+            var outputMax = Float.NEGATIVE_INFINITY
+            var outputNonFinite = 0L
             val xStarts = tileStarts(width)
             val yStarts = tileStarts(height)
 
@@ -112,9 +123,11 @@ internal object NafNetDeblurRestorer {
                             @Suppress("UNCHECKED_CAST")
                             val values = result[0].value as? Array<Array<Array<FloatArray>>>
                                 ?: throw IllegalStateException("صيغة خرج النموذج غير متوقعة")
-                            if (values.isEmpty() || values[0].size < 3 ||
-                                values[0][0].size < TILE || values[0][0][0].size < TILE) {
-                                throw IllegalStateException("أبعاد خرج النموذج غير متوافقة")
+                            if (values.size != 1 || values[0].size != 3 ||
+                                values[0][0].size != TILE || values[0][0][0].size != TILE ||
+                                values[0][1].size != TILE || values[0][2].size != TILE ||
+                                values[0].any { plane -> plane.any { row -> row.size != TILE } }) {
+                                throw IllegalStateException("أبعاد خرج النموذج غير متوافقة: المتوقع [1,3,$TILE,$TILE]")
                             }
 
                             val localLeft = if (left == 0) 0 else 32
@@ -127,9 +140,25 @@ internal object NafNetDeblurRestorer {
                                 for (x in localLeft until localRight) {
                                     val gx = left + x
                                     if (gx !in 0 until width) continue
-                                    val r = (values[0][0][y][x] * 255f).toInt().coerceIn(0, 255)
-                                    val g = (values[0][1][y][x] * 255f).toInt().coerceIn(0, 255)
-                                    val b = (values[0][2][y][x] * 255f).toInt().coerceIn(0, 255)
+                                    val rawR = values[0][0][y][x]
+                                    val rawG = values[0][1][y][x]
+                                    val rawB = values[0][2][y][x]
+                                    for (raw in floatArrayOf(rawR, rawG, rawB)) {
+                                        if (!raw.isFinite()) {
+                                            outputNonFinite++
+                                        } else {
+                                            outputMin = minOf(outputMin, raw)
+                                            outputMax = maxOf(outputMax, raw)
+                                        }
+                                    }
+                                    val sourceColor = source.getPixel(gx, gy)
+                                    absDiffSum += kotlin.math.abs((rawR * 255f).toInt().coerceIn(0, 255) - Color.red(sourceColor))
+                                    absDiffSum += kotlin.math.abs((rawG * 255f).toInt().coerceIn(0, 255) - Color.green(sourceColor))
+                                    absDiffSum += kotlin.math.abs((rawB * 255f).toInt().coerceIn(0, 255) - Color.blue(sourceColor))
+                                    comparedChannels += 3
+                                    val r = (rawR * 255f).toInt().coerceIn(0, 255)
+                                    val g = (rawG * 255f).toInt().coerceIn(0, 255)
+                                    val b = (rawB * 255f).toInt().coerceIn(0, 255)
                                     outputPixels[gy * width + gx] = Color.rgb(r, g, b)
                                 }
                             }
@@ -137,6 +166,8 @@ internal object NafNetDeblurRestorer {
                     }
                 }
             }
+            val meanAbsoluteDifference = if (comparedChannels == 0L) 0.0 else absDiffSum.toDouble() / comparedChannels
+            Log.i("NaqaaNAFNet", "Output stats: rawMin=$outputMin rawMax=$outputMax nonFinite=$outputNonFinite; meanAbsDiffFromInput=$meanAbsoluteDifference/255 across $comparedChannels channels")
         }
         return Bitmap.createBitmap(outputPixels, width, height, Bitmap.Config.ARGB_8888)
     }
