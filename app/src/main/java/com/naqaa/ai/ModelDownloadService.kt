@@ -18,12 +18,14 @@ import java.util.concurrent.Executors
 class ModelDownloadService : Service() {
     companion object {
         const val ACTION_START = "com.naqaa.ai.action.START_MODEL_DOWNLOAD"
+        const val ACTION_START_CODEFORMER = "com.naqaa.ai.action.START_CODEFORMER_DOWNLOAD"
+        const val ACTION_START_REALESRGAN = "com.naqaa.ai.action.START_REALESRGAN_DOWNLOAD"
         const val PREFS = "naqaa_model_download"
         private const val CHANNEL_ID = "naqaa_model_downloads"
         private const val NOTIFICATION_ID = 4101
-        private const val MODEL_URL =
-            "https://huggingface.co/ykk648/face_lib/resolve/main/face_restore/gfpgan/GFPGANv1.4.onnx"
-        private const val EXPECTED_SIZE = 340_000_000L
+        private const val NAFNET_URL = "https://huggingface.co/opencv/deblurring_nafnet/resolve/main/deblurring_nafnet_2025may.onnx?download=true"
+        private const val CODEFORMER_URL = "https://huggingface.co/bluefoxcreation/Codeformer-ONNX/resolve/main/codeformer.onnx?download=true"
+        private const val REALESRGAN_URL = "https://huggingface.co/skillsafe-ai/realesrgan-x4plus/resolve/main/model.onnx?download=true"
     }
 
     private val executor = Executors.newSingleThreadExecutor()
@@ -35,7 +37,10 @@ class ModelDownloadService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = buildNotification("يتم تجهيز تنزيل نموذج الذكاء الاصطناعي", 0, true)
+        val codeformer = intent?.action == ACTION_START_CODEFORMER
+        val realesrgan = intent?.action == ACTION_START_REALESRGAN
+        val title = when { realesrgan -> "Real-ESRGAN"; codeformer -> "CodeFormer"; else -> "NAFNet" }
+        val notification = buildNotification("يتم تجهيز تنزيل نموذج $title", 0, true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
@@ -43,53 +48,50 @@ class ModelDownloadService : Service() {
         }
         if (!isDownloading) {
             isDownloading = true
-            executor.execute { downloadModel() }
+            executor.execute { downloadModel(codeformer, realesrgan) }
         }
         return START_STICKY
     }
 
-    private fun downloadModel() {
+    private fun downloadModel(codeformer: Boolean, realesrgan: Boolean) {
         val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
-        val destination = File(filesDir, "gfpgan_v14.onnx")
-        val partial = File(filesDir, "gfpgan_v14.onnx.download")
+        val prefix = when { realesrgan -> "realesrgan_"; codeformer -> "codeformer_"; else -> "nafnet_" }
+        val title = when { realesrgan -> "Real-ESRGAN"; codeformer -> "CodeFormer"; else -> "NAFNet" }
+        val url = when { realesrgan -> REALESRGAN_URL; codeformer -> CODEFORMER_URL; else -> NAFNET_URL }
+        val minimumBytes = when { realesrgan -> 60_000_000L; codeformer -> 300_000_000L; else -> 80_000_000L }
+        val expectedBytes = when { realesrgan -> 64_000_000L; codeformer -> 377_000_000L; else -> 92_000_000L }
+        val fileName = when { realesrgan -> "realesrgan_x4plus.onnx"; codeformer -> "codeformer.onnx"; else -> "nafnet_deblur.onnx" }
+        val destination = File(filesDir, fileName)
+        val partial = File(filesDir, "$fileName.download")
         try {
-            if (destination.exists() && destination.length() > 300_000_000L) {
-                saveState("completed", destination.length(), destination.length(), null)
-                updateNotification("النموذج جاهز للاستخدام دون إنترنت", 100, false)
+            if (destination.exists() && destination.length() > minimumBytes) {
+                saveState(prefix, "completed", destination.length(), destination.length(), null)
+                updateNotification("نموذج $title جاهز للاستخدام دون إنترنت", 100, false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return
             }
-
-            saveState("downloading", partial.length(), EXPECTED_SIZE, null)
-            val connection = (URL(MODEL_URL).openConnection() as HttpURLConnection).apply {
+            saveState(prefix, "downloading", partial.length(), expectedBytes, null)
+            val connection = (URL(url).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 25_000
-                readTimeout = 60_000
+                readTimeout = 90_000
                 instanceFollowRedirects = true
                 setRequestProperty("User-Agent", "NaqaaAI-Android")
-                if (partial.exists() && partial.length() > 0L) {
-                    setRequestProperty("Range", "bytes=${partial.length()}-")
-                }
+                if (partial.exists() && partial.length() > 0L) setRequestProperty("Range", "bytes=${partial.length()}-")
             }
             try {
                 val responseCode = connection.responseCode
-                if (responseCode != HttpURLConnection.HTTP_OK &&
-                    responseCode != HttpURLConnection.HTTP_PARTIAL) {
+                if (responseCode != HttpURLConnection.HTTP_OK && responseCode != HttpURLConnection.HTTP_PARTIAL) {
                     throw IllegalStateException("خادم النموذج أعاد رمز HTTP $responseCode")
                 }
-
-                val append = responseCode == HttpURLConnection.HTTP_PARTIAL &&
-                    partial.exists() && partial.length() > 0L
+                val append = responseCode == HttpURLConnection.HTTP_PARTIAL && partial.exists() && partial.length() > 0L
                 if (!append && partial.exists()) partial.delete()
                 val alreadyDownloaded = if (append) partial.length() else 0L
-                val contentRange = connection.getHeaderField("Content-Range")
-                val rangeTotal = Regex("/(\\d+)$").find(contentRange ?: "")?.groupValues?.get(1)?.toLongOrNull()
+                val rangeTotal = Regex("/(\\d+)$").find(connection.getHeaderField("Content-Range") ?: "")?.groupValues?.get(1)?.toLongOrNull()
                 val responseLength = connection.getHeaderFieldLong("Content-Length", -1L)
-                val totalBytes = (rangeTotal ?: if (responseLength > 0L) alreadyDownloaded + responseLength else EXPECTED_SIZE)
-                    .coerceAtLeast(1L)
+                val totalBytes = (rangeTotal ?: if (responseLength > 0L) alreadyDownloaded + responseLength else expectedBytes).coerceAtLeast(1L)
                 var downloaded = alreadyDownloaded
                 var lastReported = downloaded
-
                 BufferedInputStream(connection.inputStream).use { input ->
                     FileOutputStream(partial, append).use { output ->
                         val buffer = ByteArray(1024 * 1024)
@@ -100,12 +102,9 @@ class ModelDownloadService : Service() {
                             downloaded += count
                             if (downloaded - lastReported >= 1024 * 1024) {
                                 output.flush()
-                                saveState("downloading", downloaded, totalBytes, null)
-                                updateNotification(
-                                    "تم تنزيل ${formatMb(downloaded)} من ${formatMb(totalBytes)} MB",
-                                    ((downloaded * 100L) / totalBytes).toInt().coerceIn(0, 99),
-                                    true
-                                )
+                                saveState(prefix, "downloading", downloaded, totalBytes, null)
+                                updateNotification("تنزيل $title: ${formatMb(downloaded)} / ${formatMb(totalBytes)} MB",
+                                    ((downloaded * 100L) / totalBytes).toInt().coerceIn(0, 99), true)
                                 lastReported = downloaded
                             }
                         }
@@ -113,25 +112,21 @@ class ModelDownloadService : Service() {
                         output.fd.sync()
                     }
                 }
-                if (partial.length() < 300_000_000L) {
-                    throw IllegalStateException(
-                        "اكتمل الاتصال لكن حجم الملف ${formatMb(partial.length())} MB فقط. أعد المحاولة مع اتصال ثابت."
-                    )
+                if (partial.length() < minimumBytes) {
+                    throw IllegalStateException("حجم ملف $title غير مكتمل (${formatMb(partial.length())} MB). أعد المحاولة.")
                 }
                 if (destination.exists()) destination.delete()
-                if (!partial.renameTo(destination)) {
-                    throw IllegalStateException("تعذر نقل النموذج إلى مجلد التطبيق")
-                }
-                saveState("completed", destination.length(), totalBytes, null)
-                updateNotification("اكتمل تنزيل نموذج نقاء AI", 100, false)
+                if (!partial.renameTo(destination)) throw IllegalStateException("تعذر حفظ ملف النموذج على الجهاز")
+                saveState(prefix, "completed", destination.length(), totalBytes, null)
+                updateNotification("اكتمل تنزيل نموذج $title", 100, false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             } finally {
                 connection.disconnect()
             }
         } catch (e: Exception) {
-            saveState("error", partial.length(), EXPECTED_SIZE, e.message ?: "خطأ غير معروف")
-            updateNotification("تعذر تنزيل النموذج. افتح نقاء AI للمحاولة مجددًا.", 0, false)
+            saveState(prefix, "error", partial.length(), expectedBytes, e.message ?: "خطأ غير معروف")
+            updateNotification("تعذر تنزيل $title. افتح نقاء AI للمحاولة مجددًا.", 0, false)
             stopForeground(STOP_FOREGROUND_DETACH)
             stopSelf()
         } finally {
@@ -139,25 +134,21 @@ class ModelDownloadService : Service() {
         }
     }
 
-    private fun saveState(state: String, downloaded: Long, total: Long, error: String?) {
+    private fun saveState(prefix: String, state: String, downloaded: Long, total: Long, error: String?) {
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-            .putString("state", state)
-            .putLong("downloaded", downloaded)
-            .putLong("total", total.coerceAtLeast(1L))
-            .putString("error", error ?: "")
+            .putString(prefix + "state", state)
+            .putLong(prefix + "downloaded", downloaded)
+            .putLong(prefix + "total", total.coerceAtLeast(1L))
+            .putString(prefix + "error", error ?: "")
             .apply()
     }
 
-    private fun formatMb(bytes: Long): String = String.format(java.util.Locale.US, "%.1f", bytes / 1_000_000.0)
+    private fun formatMb(bytes: Long) = String.format(java.util.Locale.US, "%.1f", bytes / 1_000_000.0)
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "تنزيل نموذج نقاء AI",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "إظهار تقدم تنزيل نموذج ترميم الوجوه"
+            val channel = NotificationChannel(CHANNEL_ID, "تنزيل نماذج نقاء AI", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "إظهار تقدم تنزيل نماذج الذكاء الاصطناعي"
                 setShowBadge(false)
             }
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
@@ -165,9 +156,8 @@ class ModelDownloadService : Service() {
     }
 
     private fun buildNotification(text: String, progress: Int, ongoing: Boolean): Notification {
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, CHANNEL_ID)
-        } else {
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CHANNEL_ID)
+        else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }
@@ -181,12 +171,10 @@ class ModelDownloadService : Service() {
     }
 
     private fun updateNotification(text: String, progress: Int, ongoing: Boolean) {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, buildNotification(text, progress, ongoing))
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(text, progress, ongoing))
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
-
     override fun onDestroy() {
         executor.shutdown()
         super.onDestroy()
